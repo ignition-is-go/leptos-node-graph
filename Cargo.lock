@@ -893,6 +893,7 @@ version = "0.1.0"
 dependencies = [
  "leptos",
  "leptos-node-graph",
+ "leptos-use",
  "wasm-bindgen",
  "web-sys",
 ]
