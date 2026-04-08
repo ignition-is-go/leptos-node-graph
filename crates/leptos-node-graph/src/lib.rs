@@ -11,8 +11,9 @@ pub mod layout;
 pub mod utils;
 
 pub use types::*;
-// TODO: uncomment re-exports once types are defined
-// pub use editor::NodeEditor;
-// pub use node::Node;
-// pub use anchor::{InputAnchor, OutputAnchor};
-// pub use layout::{LayoutEngine, LayoutMode};
+pub use editor::NodeEditor;
+pub use node::{Node, NodeContext};
+pub use anchor::{InputAnchor, OutputAnchor};
+pub use layout::{LayoutEngine, LayoutGraph};
+pub use history::UndoHistory;
+pub use registry::{EditorRegistry, ConnectionEntry};
