@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/leptos-node-graph", "examples/demo"]
+resolver = "2"
