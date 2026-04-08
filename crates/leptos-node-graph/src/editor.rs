@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
+use leptos_use::use_event_listener;
 
 use crate::connection::ConnectionRenderer;
 use crate::interaction;
@@ -42,17 +43,18 @@ where
         interaction::handle_canvas_mousedown(&reg_md, ev, &ref_md);
     };
 
+    // Document-level mousemove/mouseup so drag continues even outside the container
     let reg_mm = registry.clone();
     let ref_mm = container_ref;
-    let on_mousemove = move |ev: web_sys::MouseEvent| {
+    let _mousemove_cleanup = use_event_listener(leptos::prelude::document(), leptos::ev::mousemove, move |ev: web_sys::MouseEvent| {
         interaction::handle_canvas_mousemove(&reg_mm, ev, &ref_mm);
-    };
+    });
 
     let reg_mu = registry.clone();
     let ref_mu = container_ref;
-    let on_mouseup = move |ev: web_sys::MouseEvent| {
+    let _mouseup_cleanup = use_event_listener(leptos::prelude::document(), leptos::ev::mouseup, move |ev: web_sys::MouseEvent| {
         interaction::handle_canvas_mouseup(&reg_mu, ev, &ref_mu);
-    };
+    });
 
     let reg_wh = registry.clone();
     let ref_wh = container_ref;
@@ -81,8 +83,6 @@ where
             node_ref=container_ref
             style="position: relative; width: 100%; height: 100%; overflow: hidden; outline: none;"
             on:mousedown=on_mousedown
-            on:mousemove=on_mousemove
-            on:mouseup=on_mouseup
             on:wheel=on_wheel
             on:keydown=on_keydown
         >

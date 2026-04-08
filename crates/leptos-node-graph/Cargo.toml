@@ -12,12 +12,9 @@ web-sys = { version = "0.3", features = [
     "KeyboardEvent",
     "WheelEvent",
     "PointerEvent",
-    "ResizeObserver",
-    "ResizeObserverEntry",
-    "ResizeObserverSize",
     "SvgsvgElement",
     "SvgPathElement",
     "Element",
     "CssStyleDeclaration",
 ] }
-wasm-bindgen = "0.2"
+leptos-use = "0.15"

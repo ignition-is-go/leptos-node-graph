@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
-use wasm_bindgen::prelude::*;
-use web_sys::js_sys;
-use web_sys::ResizeObserver;
+use leptos_use::{UseElementSizeReturn, use_element_size};
 
 use crate::registry::{DragState, EditorRegistry};
 use crate::types::*;
@@ -57,32 +55,21 @@ where
         reg_pos.set_node_position(&id_pos, pos);
     });
 
-    // ResizeObserver to track size
-    // Note: The observer is set up once when the element mounts. The closure is
-    // intentionally leaked (via `forget`) because wasm_bindgen Closures are not
-    // Send+Sync and cannot be stored in Leptos's on_cleanup. The observer becomes
-    // inert when the DOM element is removed.
+    // Track node size via leptos-use (automatically cleaned up)
+    let UseElementSizeReturn { width, height } = use_element_size(node_ref);
+
     let reg_size = registry.clone();
-    let id_size = id.clone();
+    let size_id = id.clone();
     Effect::new(move || {
-        if let Some(el) = node_ref.get() {
-            let reg_inner = reg_size.clone();
-            let id_inner = id_size.clone();
-            let cb = Closure::<dyn Fn(js_sys::Array)>::new(move |entries: js_sys::Array| {
-                if let Some(entry) = entries.get(0).dyn_ref::<web_sys::ResizeObserverEntry>() {
-                    let rect = entry.content_rect();
-                    let size = Size::new(rect.width(), rect.height());
-                    reg_inner.set_node_size(&id_inner, size);
-                    reg_inner.emit(GraphEvent::NodeResized {
-                        id: id_inner.clone(),
-                        size,
-                    });
-                }
+        let w = width.get();
+        let h = height.get();
+        if w > 0.0 || h > 0.0 {
+            let size = Size::new(w, h);
+            reg_size.set_node_size(&size_id, size);
+            reg_size.emit(GraphEvent::NodeResized {
+                id: size_id.clone(),
+                size,
             });
-            let observer = ResizeObserver::new(cb.as_ref().unchecked_ref()).unwrap();
-            observer.observe(&el);
-            // Leak the closure so it lives as long as the observer
-            cb.forget();
         }
     });
 
