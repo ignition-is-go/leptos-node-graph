@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
-use leptos_use::{UseElementSizeReturn, use_element_size};
+use leptos_use::{UseElementSizeReturn, use_element_size, use_event_listener};
 
 use crate::registry::{DragState, EditorRegistry};
 use crate::types::*;
@@ -73,10 +73,10 @@ where
         }
     });
 
-    // Mouse down handler for selection and drag
+    // Mouse down handler — native listener so it fires before Leptos-delegated canvas handler
     let reg_md = registry.clone();
     let id_md = id.clone();
-    let on_mousedown = move |ev: web_sys::MouseEvent| {
+    let _ = use_event_listener(node_ref, leptos::ev::mousedown, move |ev: web_sys::MouseEvent| {
         if ev.button() != 0 {
             return;
         }
@@ -133,7 +133,7 @@ where
                 start_positions,
             }));
         }
-    };
+    });
 
     let id_style = id.clone();
     let node_style = move || {
@@ -168,7 +168,6 @@ where
             class=node_class
             style=node_style
             node_ref=node_ref
-            on:mousedown=on_mousedown
         >
             {children()}
         </div>

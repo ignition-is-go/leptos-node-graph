@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
+use leptos_use::use_event_listener;
 
 use crate::node::NodeContext;
 use crate::registry::EditorRegistry;
@@ -71,11 +72,13 @@ where
         }
     });
 
-    // Mouse down handler
+    // Mouse down handler — use native event listener (not Leptos delegation)
+    // because Leptos delegates on:mousedown to the document root, and the Node's
+    // stop_propagation() prevents the anchor handler from firing.
     let reg_md = registry.clone();
     let id_md = id.clone();
     let pt = port_type.clone();
-    let on_mousedown = move |ev: web_sys::MouseEvent| {
+    let _ = use_event_listener(anchor_ref, leptos::ev::mousedown, move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
         ev.prevent_default();
 
@@ -107,7 +110,7 @@ where
                 }
             }
         }
-    };
+    });
 
     let dir_class = match direction {
         PortDirection::Input => "anchor anchor--input",
@@ -149,7 +152,6 @@ where
         <div
             class=anchor_class
             node_ref=anchor_ref
-            on:mousedown=on_mousedown
         >
             <div class="anchor__dot" />
             {label_view}

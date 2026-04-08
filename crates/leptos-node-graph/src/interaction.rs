@@ -158,8 +158,6 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
     C: ConnectionId,
     T: PortType,
 {
-    let _ = ev;
-
     // End box select
     registry.box_select.set(None);
 
@@ -182,8 +180,21 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
         }
     }
 
-    // Cancel draft connection
-    registry.draft_connection.set(None);
+    // Cancel draft connection only if mouseup was NOT on an anchor
+    // (clicking an anchor to complete a connection is handled by the anchor's mousedown)
+    if let Some(target) = ev.target() {
+        use leptos::wasm_bindgen::JsCast;
+        if let Some(el) = target.dyn_ref::<web_sys::Element>() {
+            let is_anchor: bool = el.closest(".anchor").ok().flatten().is_some();
+            if !is_anchor {
+                registry.draft_connection.set(None);
+            }
+        } else {
+            registry.draft_connection.set(None);
+        }
+    } else {
+        registry.draft_connection.set(None);
+    }
 }
 
 pub fn handle_wheel<N, P, C, T>(
