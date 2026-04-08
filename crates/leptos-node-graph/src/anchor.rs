@@ -112,6 +112,28 @@ where
         }
     });
 
+    // Mouseup handler for drag-to-connect: if user drags from an output and
+    // releases on this input anchor, complete the connection.
+    let reg_mu = registry.clone();
+    let id_mu = id.clone();
+    let _ = use_event_listener(anchor_ref, leptos::ev::mouseup, move |ev: web_sys::MouseEvent| {
+        if direction != PortDirection::Input {
+            return;
+        }
+        let has_draft = reg_mu.draft_connection.with_untracked(|d| d.is_some());
+        if has_draft && reg_mu.is_compatible_target(&id_mu) {
+            ev.stop_propagation();
+            let draft = reg_mu.draft_connection.with_untracked(|d| d.clone());
+            if let Some(draft) = draft {
+                reg_mu.emit(GraphEvent::ConnectionRequested {
+                    source: draft.source_port.clone(),
+                    target: id_mu.clone(),
+                });
+                reg_mu.draft_connection.set(None);
+            }
+        }
+    });
+
     let dir_class = match direction {
         PortDirection::Input => "anchor anchor--input",
         PortDirection::Output => "anchor anchor--output",
