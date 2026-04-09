@@ -6,6 +6,28 @@ use crate::registry::EditorRegistry;
 use crate::types::*;
 use crate::utils;
 
+/// Style configuration for connections. Consumer provides this to customize appearance.
+#[derive(Clone, Debug)]
+pub struct ConnectionStyle {
+    pub stroke: String,
+    pub stroke_selected: String,
+    pub stroke_draft: String,
+    pub stroke_width: f64,
+    pub stroke_width_selected: f64,
+}
+
+impl Default for ConnectionStyle {
+    fn default() -> Self {
+        Self {
+            stroke: "#71717a".into(),
+            stroke_selected: "#ef4444".into(),
+            stroke_draft: "#22d3ee".into(),
+            stroke_width: 2.0,
+            stroke_width_selected: 3.0,
+        }
+    }
+}
+
 #[component]
 pub fn ConnectionRenderer<N, P, C, T>(
     #[prop(optional)] _marker: PhantomData<(N, P, C, T)>,
@@ -17,15 +39,16 @@ where
     T: PortType,
 {
     let registry = expect_context::<EditorRegistry<N, P, C, T>>();
+    let style_config = use_context::<ConnectionStyle>().unwrap_or_default();
     let reg2 = registry.clone();
-    let reg3 = registry.clone();
+    let style2 = style_config.clone();
 
-    // Reactive: connections, ports, selected_connections, draft_connection, viewport
     let connections_view = move || {
         let reg = registry.clone();
         let conns = reg.connections.get();
         let selected = reg.selected_connections.get();
         let ports = reg.ports.get();
+        let sc = style_config.clone();
 
         conns
             .values()
@@ -35,21 +58,21 @@ where
                 let path_d = utils::bezier_path(source_pos, target_pos);
                 let is_selected = selected.contains(&conn.id);
                 let conn_id = conn.id.clone();
-                let class = if is_selected {
-                    "connection connection--selected"
-                } else {
-                    "connection"
-                };
+
+                let stroke = if is_selected { &sc.stroke_selected } else { &sc.stroke };
+                let width = if is_selected { sc.stroke_width_selected } else { sc.stroke_width };
+                let style = format!(
+                    "pointer-events: stroke; cursor: pointer; stroke: {}; stroke-width: {};",
+                    stroke, width
+                );
 
                 let reg_click = reg.clone();
                 Some(view! {
                     <path
                         d=path_d
-                        class=class
                         fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        style="pointer-events: stroke; cursor: pointer;"
+                        style=style
+                        data-connection=""
                         on:mousedown=move |ev: web_sys::MouseEvent| {
                             ev.stop_propagation();
                             if ev.shift_key() {
@@ -70,32 +93,32 @@ where
 
     let draft_view = move || {
         let draft = reg2.draft_connection.get();
+        let sc = style2.clone();
         draft.map(|d| {
-            let path_d = utils::bezier_path(d.source_position, d.current_end);
+            // When dragging from an input, swap so the curve flows left→right
+            let (start, end) = if d.origin_direction == PortDirection::Input {
+                (d.current_end, d.source_position)
+            } else {
+                (d.source_position, d.current_end)
+            };
+            let path_d = utils::bezier_path(start, end);
+            let style = format!(
+                "pointer-events: none; stroke: {}; stroke-width: {}; stroke-dasharray: 6 4;",
+                sc.stroke_draft, sc.stroke_width
+            );
             view! {
                 <path
                     d=path_d
-                    class="connection connection--draft"
                     fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-dasharray="6 4"
-                    style="pointer-events: none;"
+                    style=style
+                    data-connection-draft=""
                 />
             }
         })
     };
 
-    let svg_style = move || {
-        let vp = reg3.viewport.get();
-        format!(
-            "position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; transform-origin: 0 0; transform: translate({}px, {}px) scale({});",
-            vp.pan_x, vp.pan_y, vp.zoom
-        )
-    };
-
     view! {
-        <svg style=svg_style>
+        <svg style="position: absolute; top: 0; left: 0; width: 10000px; height: 10000px; pointer-events: none; overflow: visible;">
             {connections_view}
             {draft_view}
         </svg>

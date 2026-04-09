@@ -166,4 +166,6 @@ pub struct DraftConnection<P: PortId, T: PortType> {
     pub source_position: Position,
     pub port_type: T,
     pub current_end: Position,
+    /// The direction of the port where the drag started.
+    pub origin_direction: PortDirection,
 }

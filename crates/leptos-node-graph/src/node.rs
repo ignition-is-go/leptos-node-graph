@@ -7,10 +7,14 @@ use leptos_use::{UseElementSizeReturn, use_element_size, use_event_listener};
 use crate::registry::{DragState, EditorRegistry};
 use crate::types::*;
 
-#[derive(Clone, Debug)]
+/// Context provided by a Node to its children.
+/// Consumers read these signals to drive their own styling.
+#[derive(Clone)]
 pub struct NodeContext<N: NodeId> {
     pub id: N,
     pub position: RwSignal<Position>,
+    pub is_selected: Signal<bool>,
+    pub is_dragging: Signal<bool>,
 }
 
 #[component]
@@ -29,16 +33,31 @@ where
     let registry = expect_context::<EditorRegistry<N, P, C, T>>();
     let node_ref = NodeRef::<leptos::html::Div>::new();
 
-    // Provide NodeContext to children
+    // Derived state signals
+    let id_sel = id.clone();
+    let reg_sel = registry.clone();
+    let is_selected = Signal::derive(move || {
+        reg_sel.selected_nodes.with(|sel| sel.contains(&id_sel))
+    });
+
+    let id_drag = id.clone();
+    let reg_drag = registry.clone();
+    let is_dragging = Signal::derive(move || {
+        reg_drag.drag_state.with(|ds| ds.as_ref().is_some_and(|d| d.node_id == id_drag))
+    });
+
+    // Provide context with state signals
     let ctx = NodeContext {
         id: id.clone(),
         position,
+        is_selected,
+        is_dragging,
     };
     provide_context(ctx);
 
     // Register node
     let initial_pos = position.get_untracked();
-    registry.register_node(id.clone(), initial_pos);
+    registry.register_node(id.clone(), initial_pos, Some(position));
 
     // Deregister on cleanup
     let reg_cleanup = registry.clone();
@@ -47,15 +66,18 @@ where
         reg_cleanup.deregister_node(&id_cleanup);
     });
 
-    // Sync position signal -> registry
+    // Sync position signal -> registry (skip during drag to avoid cycles)
     let reg_pos = registry.clone();
     let id_pos = id.clone();
     Effect::new(move || {
         let pos = position.get();
-        reg_pos.set_node_position(&id_pos, pos);
+        let dragging = reg_pos.drag_state.with_untracked(|ds| ds.is_some());
+        if !dragging {
+            reg_pos.set_node_position(&id_pos, pos);
+        }
     });
 
-    // Track node size via leptos-use (automatically cleaned up)
+    // Track node size
     let UseElementSizeReturn { width, height } = use_element_size(node_ref);
 
     let reg_size = registry.clone();
@@ -73,13 +95,28 @@ where
         }
     });
 
-    // Mouse down handler — native listener so it fires before Leptos-delegated canvas handler
+    // Mouse down handler — native listener
     let reg_md = registry.clone();
     let id_md = id.clone();
     let _ = use_event_listener(node_ref, leptos::ev::mousedown, move |ev: web_sys::MouseEvent| {
         if ev.button() != 0 {
             return;
         }
+
+        // Skip if click was on an anchor or interactive form element
+        if let Some(target) = ev.target() {
+            use leptos::wasm_bindgen::JsCast;
+            if let Some(el) = target.dyn_ref::<web_sys::Element>() {
+                if el.closest("[data-anchor]").ok().flatten().is_some() {
+                    return;
+                }
+                let tag = el.tag_name().to_uppercase();
+                if matches!(tag.as_str(), "INPUT" | "SELECT" | "TEXTAREA" | "BUTTON" | "OPTION") {
+                    return;
+                }
+            }
+        }
+
         ev.stop_propagation();
 
         let node_id = id_md.clone();
@@ -87,7 +124,6 @@ where
         if ev.shift_key() {
             reg_md.toggle_node_selection(node_id);
         } else {
-            // If not already selected, select exclusively
             let already_selected = reg_md
                 .selected_nodes
                 .with_untracked(|sel| sel.contains(&node_id));
@@ -114,7 +150,6 @@ where
                 ev.client_y() as f64 - offset_y,
             ));
 
-            // Capture start positions of all selected nodes
             let start_positions: HashMap<N, Position> = reg_md.selected_nodes.with_untracked(
                 |sel| {
                     reg_md.nodes.with_untracked(|nodes| {
@@ -135,39 +170,16 @@ where
         }
     });
 
-    let id_style = id.clone();
     let node_style = move || {
         let pos = position.get();
         format!("position: absolute; left: {}px; top: {}px;", pos.x, pos.y)
     };
 
-    let id_class = id.clone();
-    let reg_class = registry.clone();
-    let node_class = move || {
-        let selected = reg_class
-            .selected_nodes
-            .with(|sel| sel.contains(&id_class));
-        let dragging = reg_class
-            .drag_state
-            .with(|ds| ds.as_ref().is_some_and(|d| d.node_id == id_class));
-        let mut cls = String::from("node");
-        if selected {
-            cls.push_str(" node--selected");
-        }
-        if dragging {
-            cls.push_str(" node--dragging");
-        }
-        cls
-    };
-
-    // Suppress unused variable warnings
-    let _ = id_style;
-
     view! {
         <div
-            class=node_class
             style=node_style
             node_ref=node_ref
+            data-node=""
         >
             {children()}
         </div>

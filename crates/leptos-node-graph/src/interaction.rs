@@ -43,9 +43,21 @@ pub fn handle_canvas_mousedown<N, P, C, T>(
     C: ConnectionId,
     T: PortType,
 {
-    // Only handle left click on empty canvas
+    // Only handle left click
     if ev.button() != 0 {
         return;
+    }
+
+    // Skip if click was on a node or anchor (those have their own handlers)
+    if let Some(target) = ev.target() {
+        use leptos::wasm_bindgen::JsCast;
+        if let Some(el) = target.dyn_ref::<web_sys::Element>() {
+            let on_node: bool = el.closest("[data-node]").ok().flatten().is_some();
+            let on_anchor: bool = el.closest("[data-anchor]").ok().flatten().is_some();
+            if on_node || on_anchor {
+                return;
+            }
+        }
     }
 
     // Cancel any draft connection
@@ -108,7 +120,7 @@ pub fn handle_canvas_mousemove<N, P, C, T>(
                     if let Some(grid) = grid_size {
                         new_pos = utils::snap_to_grid(new_pos, grid);
                     }
-                    registry.set_node_position(node_id, new_pos);
+                    registry.set_node_position_with_signal(node_id, new_pos);
                 }
             }
         });
@@ -185,7 +197,7 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
     if let Some(target) = ev.target() {
         use leptos::wasm_bindgen::JsCast;
         if let Some(el) = target.dyn_ref::<web_sys::Element>() {
-            let is_anchor: bool = el.closest(".anchor").ok().flatten().is_some();
+            let is_anchor: bool = el.closest("[data-anchor]").ok().flatten().is_some();
             if !is_anchor {
                 registry.draft_connection.set(None);
             }

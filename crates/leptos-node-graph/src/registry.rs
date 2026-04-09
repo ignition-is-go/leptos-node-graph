@@ -5,11 +5,13 @@ use leptos::prelude::*;
 use crate::types::*;
 
 /// Entry for a registered node.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NodeEntry<N: NodeId> {
     pub id: N,
     pub position: Position,
     pub size: Size,
+    /// The consumer's position signal — updated during drag for live visual feedback.
+    pub position_signal: Option<RwSignal<Position>>,
 }
 
 /// Entry for a registered port.
@@ -108,7 +110,7 @@ where
     }
 
     /// Register a node at the given position.
-    pub fn register_node(&self, id: N, position: Position) {
+    pub fn register_node(&self, id: N, position: Position, position_signal: Option<RwSignal<Position>>) {
         self.nodes.update(|nodes| {
             nodes.insert(
                 id.clone(),
@@ -116,6 +118,7 @@ where
                     id,
                     position,
                     size: Size::default(),
+                    position_signal,
                 },
             );
         });
@@ -203,6 +206,21 @@ where
                 entry.position = position;
             }
         });
+    }
+
+    /// Update a node's position and its consumer signal. Used during drag for live feedback.
+    pub fn set_node_position_with_signal(&self, id: &N, position: Position) {
+        let signal = self.nodes.with_untracked(|nodes| {
+            nodes.get(id).and_then(|e| e.position_signal)
+        });
+        self.nodes.update(|nodes| {
+            if let Some(entry) = nodes.get_mut(id) {
+                entry.position = position;
+            }
+        });
+        if let Some(sig) = signal {
+            sig.set(position);
+        }
     }
 
     /// Update a node's size.

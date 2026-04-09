@@ -71,7 +71,7 @@ where
     let canvas_transform = move || {
         let vp = reg_vp.viewport.get();
         format!(
-            "transform: translate({}px, {}px) scale({}); transform-origin: 0 0;",
+            "position: relative; transform: translate({}px, {}px) scale({}); transform-origin: 0 0;",
             vp.pan_x, vp.pan_y, vp.zoom
         )
     };
@@ -87,9 +87,9 @@ where
             on:keydown=on_keydown
         >
             <div class="node-editor__canvas" style=canvas_transform>
+                <ConnectionRenderer<N, P, C, T> />
                 {children()}
             </div>
-            <ConnectionRenderer<N, P, C, T> />
             <SelectionBox<N, P, C, T> />
         </div>
     }
