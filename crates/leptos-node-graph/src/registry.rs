@@ -56,6 +56,8 @@ pub struct DragState<N: NodeId> {
     pub node_id: N,
     pub offset: Position,
     pub start_positions: HashMap<N, Position>,
+    /// Whether alt was held when the drag started.
+    pub alt_key: bool,
 }
 
 /// The central reactive state store.

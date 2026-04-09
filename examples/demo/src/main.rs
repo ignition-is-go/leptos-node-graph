@@ -308,36 +308,164 @@ fn main() {
     mount_to_body(App);
 }
 
+// ---------------------------------------------------------------------------
+// Dynamic node storage
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct DynNode {
+    id: String,
+    node_type: String,
+    position: RwSignal<Position>,
+}
+
+static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(100);
+
+fn next_id(prefix: &str) -> String {
+    let n = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}_{n}")
+}
+
+/// The full node type catalog with port definitions.
+fn node_catalog() -> Vec<NodeMenuItem> {
+    vec![
+        NodeMenuItem {
+            id: "color_source".into(),
+            label: "Color Source".into(),
+            category: Some("Input".into()),
+            description: Some("Produces a color and alpha".into()),
+            ports: vec![
+                MenuPort { id: "color".into(), label: "Color".into(), direction: PortDirection::Output },
+                MenuPort { id: "alpha".into(), label: "Alpha".into(), direction: PortDirection::Output },
+            ],
+        },
+        NodeMenuItem {
+            id: "mix".into(),
+            label: "Mix".into(),
+            category: Some("Color".into()),
+            description: Some("Blend two colors".into()),
+            ports: vec![
+                MenuPort { id: "a".into(), label: "A".into(), direction: PortDirection::Input },
+                MenuPort { id: "b".into(), label: "B".into(), direction: PortDirection::Input },
+                MenuPort { id: "factor".into(), label: "Factor".into(), direction: PortDirection::Input },
+                MenuPort { id: "result".into(), label: "Result".into(), direction: PortDirection::Output },
+            ],
+        },
+        NodeMenuItem {
+            id: "math".into(),
+            label: "Math".into(),
+            category: Some("Math".into()),
+            description: Some("Arithmetic operation".into()),
+            ports: vec![
+                MenuPort { id: "a".into(), label: "A".into(), direction: PortDirection::Input },
+                MenuPort { id: "b".into(), label: "B".into(), direction: PortDirection::Input },
+                MenuPort { id: "result".into(), label: "Result".into(), direction: PortDirection::Output },
+            ],
+        },
+        NodeMenuItem {
+            id: "output".into(),
+            label: "Output".into(),
+            category: Some("Output".into()),
+            description: Some("Final output destination".into()),
+            ports: vec![
+                MenuPort { id: "color".into(), label: "Color".into(), direction: PortDirection::Input },
+                MenuPort { id: "value".into(), label: "Value".into(), direction: PortDirection::Input },
+            ],
+        },
+    ]
+}
+
 #[component]
 fn App() -> impl IntoView {
     let connections: RwSignal<HashMap<String, ConnectionEntry<String, String>>> =
         RwSignal::new(HashMap::new());
     let connections_signal = Signal::derive(move || connections.get());
 
-    let color_source_pos = RwSignal::new(Position::new(50.0, 100.0));
-    let mix_pos = RwSignal::new(Position::new(300.0, 200.0));
-    let math_pos = RwSignal::new(Position::new(350.0, 10.0));
-    let output_pos = RwSignal::new(Position::new(650.0, 100.0));
+    // Dynamic node list
+    let nodes: RwSignal<Vec<DynNode>> = RwSignal::new(vec![
+        DynNode { id: "color_source_0".into(), node_type: "color_source".into(), position: RwSignal::new(Position::new(50.0, 100.0)) },
+        DynNode { id: "mix_0".into(), node_type: "mix".into(), position: RwSignal::new(Position::new(300.0, 200.0)) },
+        DynNode { id: "math_0".into(), node_type: "math".into(), position: RwSignal::new(Position::new(350.0, 10.0)) },
+        DynNode { id: "output_0".into(), node_type: "output".into(), position: RwSignal::new(Position::new(650.0, 100.0)) },
+    ]);
 
-    let on_event = Callback::new(move |event: GraphEvent<String, String, String>| match event {
-        GraphEvent::ConnectionRequested { source, target } => {
-            let already =
-                connections.with_untracked(|c| c.values().any(|e| e.target == target));
-            if already { return; }
-            connections.update(|map| {
-                let id = format!("conn_{}", map.len());
-                map.insert(id.clone(), ConnectionEntry { id: id.clone(), source, target });
-            });
-        }
-        GraphEvent::ConnectionRemoved { id } => {
-            connections.update(|map| { map.remove(&id); });
-        }
-        other => {
-            console::log_1(&format!("Graph event: {:?}", other).into());
+    // Node menu state
+    let menu_open_at: RwSignal<Option<Position>> = RwSignal::new(None);
+    let menu_search: RwSignal<String> = RwSignal::new(String::new());
+    let draft_ctx: RwSignal<Option<DraftContext>> = RwSignal::new(None);
+
+    // Filtered catalog based on search
+    let catalog = node_catalog();
+    let menu_items = Signal::derive(move || {
+        let search = menu_search.get().to_lowercase();
+        let items = catalog.clone();
+        if search.is_empty() {
+            items
+        } else {
+            items.into_iter().filter(|item| {
+                item.label.to_lowercase().contains(&search)
+                    || item.category.as_ref().map_or(false, |c| c.to_lowercase().contains(&search))
+                    || item.description.as_ref().map_or(false, |d| d.to_lowercase().contains(&search))
+            }).collect()
         }
     });
 
-    // Provide connection style via context (picked up by ConnectionRenderer)
+    let on_event = {
+        let connections = connections;
+        Callback::new(move |event: GraphEvent<String, String, String>| match event {
+            GraphEvent::ConnectionRequested { source, target } => {
+                let already =
+                    connections.with_untracked(|c| c.values().any(|e| e.target == target));
+                if already { return; }
+                connections.update(|map| {
+                    let id = next_id("conn");
+                    map.insert(id.clone(), ConnectionEntry { id, source, target });
+                });
+            }
+            GraphEvent::ConnectionRemoved { id } => {
+                connections.update(|map| { map.remove(&id); });
+            }
+            GraphEvent::NodesDeleted { ids } => {
+                nodes.update(|ns| ns.retain(|n| !ids.contains(&n.id)));
+            }
+            other => {
+                console::log_1(&format!("Graph event: {:?}", other).into());
+            }
+        })
+    };
+
+    // Menu event handler — creates nodes and optionally connects them
+    let on_menu_event = {
+        let _connections = connections;
+        let draft_ctx = draft_ctx;
+        Callback::new(move |event: NodeMenuEvent| match event {
+            NodeMenuEvent::CreateNode { item_id, position, connect_to_port } => {
+                let node_id = next_id(&item_id);
+                nodes.update(|ns| {
+                    ns.push(DynNode {
+                        id: node_id.clone(),
+                        node_type: item_id.clone(),
+                        position: RwSignal::new(position),
+                    });
+                });
+
+                // If a port was selected during a draft connection, create the connection
+                if let Some(port_id) = connect_to_port {
+                    let full_port_id = format!("{}_{}", node_id, port_id);
+                    // The draft context tells us which direction the draft came from
+                    // We need to get the draft source port from the registry
+                    // For now, emit a log — the consumer would wire this up with their registry
+                    console::log_1(&format!("Connect to port: {}", full_port_id).into());
+                }
+
+                draft_ctx.set(None);
+            }
+            NodeMenuEvent::Cancelled => {
+                draft_ctx.set(None);
+            }
+        })
+    };
+
     provide_context(ConnectionStyle {
         stroke: "#71717a".into(),
         stroke_selected: "#ef4444".into(),
@@ -351,23 +479,123 @@ fn App() -> impl IntoView {
         background: "rgba(99, 102, 241, 0.1)".into(),
     });
 
+    let groups: RwSignal<Vec<GroupBox<String>>> = RwSignal::new(vec![
+        GroupBox {
+            id: "color-processing".into(),
+            node_ids: vec!["color_source_0".into(), "mix_0".into()],
+            label: Some("Color Processing".into()),
+            color: Some("#8b5cf6".into()),
+            error: false,
+        },
+        GroupBox {
+            id: "output-chain".into(),
+            node_ids: vec!["math_0".into(), "output_0".into()],
+            label: Some("Output".into()),
+            color: Some("#22d3ee".into()),
+            error: false,
+        },
+    ]);
+    let groups_signal = Signal::derive(move || groups.get());
+
+    let on_group_event = Callback::new(move |event: GroupEvent<String>| {
+        match event {
+            GroupEvent::Renamed { group_id, new_label } => {
+                groups.update(|gs| {
+                    if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
+                        g.label = Some(new_label);
+                    }
+                });
+            }
+            GroupEvent::NodeAdded { group_id, node_id } => {
+                groups.update(|gs| {
+                    if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
+                        if !g.node_ids.contains(&node_id) {
+                            g.node_ids.push(node_id);
+                        }
+                    }
+                });
+            }
+            GroupEvent::NodeRemoved { group_id, node_id } => {
+                groups.update(|gs| {
+                    if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
+                        g.node_ids.retain(|id| id != &node_id);
+                    }
+                });
+            }
+        }
+    });
+
+    // Get viewport from registry for the menu (available after NodeEditor mounts)
+    let viewport_signal: RwSignal<ViewportTransform> = RwSignal::new(ViewportTransform::default());
+    // We'll sync this from the registry via an effect inside the editor
+
     view! {
         <style>"html, body { margin: 0; padding: 0; background: #18181b; color-scheme: dark; }"</style>
-        <div style="width: 100vw; height: 100vh; overflow: hidden; \
-                     font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; \
-                     font-size: 13px; color: #d4d4d8; box-sizing: border-box;">
+        <div
+            style="width: 100vw; height: 100vh; overflow: hidden; \
+                   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; \
+                   font-size: 13px; color: #d4d4d8; box-sizing: border-box;"
+            on:dblclick=move |ev: web_sys::MouseEvent| {
+                // Open node menu on double-click on empty canvas
+                let vp = viewport_signal.get_untracked();
+                let canvas_pos = vp.screen_to_canvas(Position::new(ev.client_x() as f64, ev.client_y() as f64));
+                menu_open_at.set(Some(canvas_pos));
+            }
+        >
             <NodeEditor
                 config={EditorConfig::default()}
                 connections=connections_signal
                 on_event=on_event
                 _marker={PhantomData::<DemoPort>}
             >
-                <ColorSourceNode position=color_source_pos />
-                <MixNode position=mix_pos />
-                <MathNode position=math_pos />
-                <OutputNode position=output_pos />
+                <ViewportSync target=viewport_signal />
+                <GroupBoxOverlay<String, String, String, DemoPort>
+                    groups=groups_signal
+                    on_event=on_group_event
+                />
+                <For
+                    each=move || nodes.get()
+                    key=|n| n.id.clone()
+                    let:node
+                >
+                    <DynNodeView node=node />
+                </For>
             </NodeEditor>
+            <NodeMenu
+                items=menu_items
+                search_text=menu_search
+                on_event=on_menu_event
+                open_at=menu_open_at
+                viewport=Signal::derive(move || viewport_signal.get())
+                draft_context=Signal::derive(move || draft_ctx.get())
+            />
         </div>
+    }
+}
+
+/// Syncs the EditorRegistry viewport into a consumer-owned signal.
+#[component]
+fn ViewportSync(target: RwSignal<ViewportTransform>) -> impl IntoView {
+    let reg = expect_context::<EditorRegistry<String, String, String, DemoPort>>();
+    Effect::new(move || {
+        let vp = reg.viewport.get();
+        target.set(vp);
+    });
+}
+
+/// Renders the appropriate node component based on node_type.
+#[component]
+fn DynNodeView(node: DynNode) -> impl IntoView {
+    let node_type = node.node_type.clone();
+    let id = node.id.clone();
+    let position = node.position;
+
+    match node_type.as_str() {
+        "color_source" => view! { <ColorSourceNode id=id position=position /> }.into_any(),
+        "mix" => view! { <MixNode id=id position=position /> }.into_any(),
+        "math" => view! { <MathNode id=id position=position /> }.into_any(),
+        "output" => view! { <OutputNode id=id position=position /> }.into_any(),
+        _ => view! { <div>"Unknown node type"</div> }.into_any(),
     }
 }
 
@@ -376,14 +604,17 @@ fn App() -> impl IntoView {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn ColorSourceNode(position: RwSignal<Position>) -> impl IntoView {
+fn ColorSourceNode(id: String, position: RwSignal<Position>) -> impl IntoView {
+    let p = |name: &str| format!("{id}_{name}");
+    let color_id = p("color");
+    let alpha_id = p("alpha");
     view! {
-        <StyledNode id="color_source".into() position=position>
+        <StyledNode id=id position=position>
             <NodeHeader title="Color Source" />
             <NodePorts
-                outputs=Box::new(|| view! {
-                    <Out id="cs_color".into() port_type=DemoPort::Color label="Color" />
-                    <Out id="cs_alpha".into() port_type=DemoPort::Float label="Alpha" />
+                outputs=Box::new(move || view! {
+                    <Out id=color_id.clone() port_type=DemoPort::Color label="Color" />
+                    <Out id=alpha_id.clone() port_type=DemoPort::Float label="Alpha" />
                 }.into_any())
             />
         </StyledNode>
@@ -391,9 +622,14 @@ fn ColorSourceNode(position: RwSignal<Position>) -> impl IntoView {
 }
 
 #[component]
-fn MixNode(position: RwSignal<Position>) -> impl IntoView {
+fn MixNode(id: String, position: RwSignal<Position>) -> impl IntoView {
+    let p = |name: &str| format!("{id}_{name}");
+    let a_id = p("a");
+    let b_id = p("b");
+    let factor_id = p("factor");
+    let result_id = p("result");
     view! {
-        <StyledNode id="mix".into() position=position>
+        <StyledNode id=id position=position>
             <NodeHeader title="Mix" />
             <NodeContent>
                 <NodeField label="Blend">
@@ -401,18 +637,18 @@ fn MixNode(position: RwSignal<Position>) -> impl IntoView {
                 </NodeField>
             </NodeContent>
             <NodePorts
-                inputs=Box::new(|| view! {
-                    <In id="mix_a".into() port_type=DemoPort::Color label="A" />
-                    <In id="mix_b".into() port_type=DemoPort::Color label="B" />
-                    <In id="mix_factor".into() port_type=DemoPort::Float>
+                inputs=Box::new(move || view! {
+                    <In id=a_id.clone() port_type=DemoPort::Color label="A" />
+                    <In id=b_id.clone() port_type=DemoPort::Color label="B" />
+                    <In id=factor_id.clone() port_type=DemoPort::Float>
                         <AnchorRow>
                             <AnchorDot />
                             <NumberInput label="Factor" initial="0.5" />
                         </AnchorRow>
                     </In>
                 }.into_any())
-                outputs=Box::new(|| view! {
-                    <Out id="mix_out".into() port_type=DemoPort::Color label="Result" />
+                outputs=Box::new(move || view! {
+                    <Out id=result_id.clone() port_type=DemoPort::Color label="Result" />
                 }.into_any())
             />
         </StyledNode>
@@ -420,27 +656,31 @@ fn MixNode(position: RwSignal<Position>) -> impl IntoView {
 }
 
 #[component]
-fn MathNode(position: RwSignal<Position>) -> impl IntoView {
+fn MathNode(id: String, position: RwSignal<Position>) -> impl IntoView {
+    let p = |name: &str| format!("{id}_{name}");
+    let a_id = p("a");
+    let b_id = p("b");
+    let result_id = p("result");
     view! {
-        <StyledNode id="math".into() position=position>
+        <StyledNode id=id position=position>
             <NodeHeader title="Math" />
             <NodePorts
-                inputs=Box::new(|| view! {
-                    <In id="math_a".into() port_type=DemoPort::Float>
+                inputs=Box::new(move || view! {
+                    <In id=a_id.clone() port_type=DemoPort::Float>
                         <AnchorRow>
                             <AnchorDot />
                             <NumberInput label="A" />
                         </AnchorRow>
                     </In>
-                    <In id="math_b".into() port_type=DemoPort::Float>
+                    <In id=b_id.clone() port_type=DemoPort::Float>
                         <AnchorRow>
                             <AnchorDot />
                             <NumberInput label="B" />
                         </AnchorRow>
                     </In>
                 }.into_any())
-                outputs=Box::new(|| view! {
-                    <Out id="math_result".into() port_type=DemoPort::Float label="Result" />
+                outputs=Box::new(move || view! {
+                    <Out id=result_id.clone() port_type=DemoPort::Float label="Result" />
                 }.into_any())
             />
         </StyledNode>
@@ -448,14 +688,17 @@ fn MathNode(position: RwSignal<Position>) -> impl IntoView {
 }
 
 #[component]
-fn OutputNode(position: RwSignal<Position>) -> impl IntoView {
+fn OutputNode(id: String, position: RwSignal<Position>) -> impl IntoView {
+    let p = |name: &str| format!("{id}_{name}");
+    let color_id = p("color");
+    let value_id = p("value");
     view! {
-        <StyledNode id="output".into() position=position>
+        <StyledNode id=id position=position>
             <NodeHeader title="Output" />
             <NodePorts
-                inputs=Box::new(|| view! {
-                    <In id="out_color".into() port_type=DemoPort::Color label="Color" />
-                    <In id="out_value".into() port_type=DemoPort::Any label="Value" />
+                inputs=Box::new(move || view! {
+                    <In id=color_id.clone() port_type=DemoPort::Color label="Color" />
+                    <In id=value_id.clone() port_type=DemoPort::Any label="Value" />
                 }.into_any())
             />
         </StyledNode>

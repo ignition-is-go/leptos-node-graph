@@ -8,6 +8,8 @@ pub mod selection;
 pub mod interaction;
 pub mod history;
 pub mod layout;
+pub mod group;
+pub mod menu;
 pub mod utils;
 
 pub use types::*;
@@ -16,6 +18,8 @@ pub use node::{Node, NodeContext};
 pub use anchor::{InputAnchor, OutputAnchor, AnchorContext};
 pub use connection::ConnectionStyle;
 pub use selection::SelectionBoxStyle;
+pub use group::{GroupBoxOverlay, GroupBox, GroupBounds, GroupEvent};
+pub use menu::{NodeMenu, NodeMenuItem, NodeMenuEvent, NodeMenuContext, MenuPort, DraftContext};
 pub use layout::{LayoutEngine, LayoutGraph};
 pub use history::UndoHistory;
 pub use registry::{EditorRegistry, ConnectionEntry};

@@ -166,6 +166,7 @@ where
                 node_id: node_id.clone(),
                 offset: canvas_mouse,
                 start_positions,
+                alt_key: ev.alt_key(),
             }));
         }
     });
