@@ -87,7 +87,7 @@ where
     let prev_alt_drag: RwSignal<Option<N>> = RwSignal::new(None);
 
     let reg_drag = registry.clone();
-    let on_event_drag = on_event.clone();
+    let on_event_drag = on_event;
     Effect::new(move || {
         let drag = reg_drag.drag_state.get();
         let prev = prev_alt_drag.get_untracked();
@@ -136,15 +136,13 @@ where
                         for group in &current_groups {
                             if let Some(bounds) =
                                 compute_bounds(&group.node_ids, &nodes_map, padding)
-                            {
-                                if bounds.contains(center) {
+                                && bounds.contains(center) {
                                     on_ev.run(GroupEvent::NodeAdded {
                                         group_id: group.id.clone(),
                                         node_id: node_id.clone(),
                                     });
                                     break;
                                 }
-                            }
                         }
                     }
                 }
@@ -169,12 +167,11 @@ where
                     let current_groups = groups.get_untracked();
                     let mut found = None;
                     for group in &current_groups {
-                        if let Some(bounds) = compute_bounds(&group.node_ids, &all_nodes, padding) {
-                            if bounds.contains(center) {
+                        if let Some(bounds) = compute_bounds(&group.node_ids, &all_nodes, padding)
+                            && bounds.contains(center) {
                                 found = Some(group.id.clone());
                                 break;
                             }
-                        }
                     }
                     hover_group.set(found);
                 }
@@ -252,7 +249,7 @@ where
                         };
 
                         let group_id = group.id.clone();
-                        let on_event_rename = on_event.clone();
+                        let on_event_rename = on_event;
 
                         view! {
                             <GroupLabel
@@ -309,7 +306,7 @@ fn GroupLabel<N: NodeId>(
     );
 
     let group_id_commit = group_id.clone();
-    let on_rename_commit = on_rename.clone();
+    let on_rename_commit = on_rename;
     let commit = move || {
         set_editing.set(false);
         let new_label = text.get_untracked();
@@ -323,12 +320,11 @@ fn GroupLabel<N: NodeId>(
 
     // Focus input when entering edit mode
     Effect::new(move || {
-        if editing.get() {
-            if let Some(el) = input_ref.get() {
+        if editing.get()
+            && let Some(el) = input_ref.get() {
                 let _ = el.focus();
-                let _ = el.select();
+                el.select();
             }
-        }
     });
 
     move || {
@@ -348,6 +344,7 @@ fn GroupLabel<N: NodeId>(
                     }
                     on:blur=move |_| { commit_blur(); }
                     on:keydown=move |ev: web_sys::KeyboardEvent| {
+                        ev.stop_propagation();
                         if ev.key() == "Enter" || ev.key() == "Escape" {
                             commit_key();
                         }

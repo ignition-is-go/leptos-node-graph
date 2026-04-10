@@ -193,7 +193,7 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
         registry.drag_state.set(None);
 
         // Emit NodeMoved for each selected node that was dragged
-        for (node_id, _start_pos) in &drag.start_positions {
+        for node_id in drag.start_positions.keys() {
             let current_pos = registry
                 .nodes
                 .with_untracked(|nodes| nodes.get(node_id).map(|n| n.position));
@@ -213,15 +213,7 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
             let is_anchor: bool = el.closest("[data-anchor]").ok().flatten().is_some();
             let is_menu: bool = el.closest("[data-node-menu]").ok().flatten().is_some();
             if !is_anchor && !is_menu {
-                // Also check if a menu is currently open anywhere in the document
-                let menu_open: bool = leptos::prelude::document()
-                    .query_selector("[data-node-menu]")
-                    .ok()
-                    .flatten()
-                    .is_some();
-                if !menu_open {
-                    registry.draft_connection.set(None);
-                }
+                registry.draft_connection.set(None);
             }
         } else {
             registry.draft_connection.set(None);

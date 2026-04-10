@@ -40,7 +40,7 @@ where
     C: ConnectionId,
     T: PortType,
 {
-    let registry = EditorRegistry::<N, P, C, T>::new(config, on_event.clone());
+    let registry = EditorRegistry::<N, P, C, T>::new(config, on_event);
     provide_context(registry.clone());
 
     let container_ref = NodeRef::<leptos::html::Div>::new();
@@ -163,7 +163,7 @@ where
 
     // Menu event handler — emits GraphEvent::CreateNode and clears draft
     let reg_menu = registry.clone();
-    let on_event_menu = on_event.clone();
+    let on_event_menu = on_event;
     let on_menu_event = Callback::new(move |event: NodeMenuEvent| {
         match event {
             NodeMenuEvent::CreateNode {
@@ -212,7 +212,7 @@ where
                 DraftContext {
                     origin_direction: d.origin_direction,
                     source_type_id,
-                    is_compatible: compat_cb.clone(),
+                    is_compatible: compat_cb,
                 }
             })
         })
@@ -228,10 +228,10 @@ where
     };
 
     // Menu items (use empty vec if not provided)
-    let menu_items_signal = menu_items.unwrap_or_else(|| Signal::derive(|| vec![]));
+    let menu_items_signal = menu_items.unwrap_or_else(|| Signal::derive(std::vec::Vec::new));
 
     // Groups overlay
-    let groups_signal = groups.unwrap_or_else(|| Signal::derive(|| vec![]));
+    let groups_signal = groups.unwrap_or_else(|| Signal::derive(std::vec::Vec::new));
     let groups_view = if let Some(cb) = on_group_event {
         view! {
             <GroupBoxOverlay<N, P, C, T>

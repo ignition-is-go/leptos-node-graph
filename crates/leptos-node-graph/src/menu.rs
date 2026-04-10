@@ -112,7 +112,7 @@ pub fn NodeMenu(
     });
 
     // Close on Escape or click outside (native listener so it works reliably)
-    let on_event_close = on_event.clone();
+    let on_event_close = on_event;
     let _ = use_event_listener(
         leptos::prelude::document(),
         leptos::ev::pointerdown,
@@ -122,11 +122,10 @@ pub fn NodeMenu(
             }
             if let Some(target) = ev.target() {
                 use leptos::wasm_bindgen::JsCast;
-                if let Some(el) = target.dyn_ref::<web_sys::Element>() {
-                    if el.closest("[data-node-menu]").ok().flatten().is_some() {
+                if let Some(el) = target.dyn_ref::<web_sys::Element>()
+                    && el.closest("[data-node-menu]").ok().flatten().is_some() {
                         return;
                     }
-                }
             }
             open_at.set(None);
             on_event_close.run(NodeMenuEvent::Cancelled);
@@ -135,7 +134,6 @@ pub fn NodeMenu(
 
     // Helper: emit create event and close menu
     let emit_create = {
-        let on_event = on_event.clone();
         move |item_id: String, port_id: Option<String>| {
             if let Some(pos) = open_at.get_untracked() {
                 on_event.run(NodeMenuEvent::CreateNode {
@@ -149,9 +147,11 @@ pub fn NodeMenu(
     };
 
     // Keyboard handler
-    let on_event_key = on_event.clone();
-    let emit_create_key = emit_create.clone();
+    let on_event_key = on_event;
+    let emit_create_key = emit_create;
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        // Stop all keyboard events from reaching the editor
+        ev.stop_propagation();
         let item_count = items.with_untracked(|items| items.len());
 
         match ev.key().as_str() {
@@ -288,7 +288,7 @@ pub fn NodeMenu(
                                 .map(|(i, item)| {
                                     let is_selected = i == selected;
                                     let dc_inner = dc.clone();
-                                    let emit = emit_create.clone();
+                                    let emit = emit_create;
 
                                     // Category header
                                     let cat_header = if item.category != last_category {
@@ -356,7 +356,7 @@ pub fn NodeMenu(
                                     };
 
                                     // Node item click handler
-                                    let emit_item = emit.clone();
+                                    let emit_item = emit;
                                     let item_id_click = item_id.clone();
                                     let auto_port_click = auto_port.clone();
                                     let has_multi_ports = compatible_ports.len() > 1;
@@ -365,7 +365,7 @@ pub fn NodeMenu(
                                     let port_views = if compatible_ports.len() > 1 {
                                         let hp = hp.clone();
                                         let ports_html: Vec<_> = compatible_ports.into_iter().map(|port| {
-                                            let emit_port = emit.clone();
+                                            let emit_port = emit;
                                             let iid = item_id.clone();
                                             let pid = port.id.clone();
                                             let dir_icon = match port.direction {

@@ -5,6 +5,10 @@ use leptos::prelude::*;
 use leptos_node_graph::*;
 use web_sys::console;
 
+mod utils;
+use utils::{catalog::node_catalog};
+
+use crate::utils::{colors::random_group_color, ids::next_id, seed::generate_demo_graph};
 // ---------------------------------------------------------------------------
 // Port type
 // ---------------------------------------------------------------------------
@@ -48,16 +52,8 @@ const ANCHOR_MARKER: AM = PhantomData;
 // Styled wrappers — all visual styles inline, driven by context signals
 // ---------------------------------------------------------------------------
 
-#[component]
-fn StyledNode(id: String, position: RwSignal<Position>, children: Children) -> impl IntoView {
-    view! {
-        <Node id=id position=position _marker=NODE_MARKER>
-            <NodeCard>{children()}</NodeCard>
-        </Node>
-    }
-}
-
-/// The visual card wrapper. Reads `NodeContext` for state-driven styling.
+/// Card wrapper that reads NodeContext for selection/drag styling.
+/// Applied inside the Node's render tree.
 #[component]
 fn NodeCard(children: Children) -> impl IntoView {
     let ctx = expect_context::<NodeContext<String>>();
@@ -83,34 +79,18 @@ fn NodeCard(children: Children) -> impl IntoView {
     view! { <div style=style>{children()}</div> }
 }
 
-#[component]
-fn NodeHeader(#[prop(into)] title: String) -> impl IntoView {
+fn header_view(title: &str) -> impl IntoView {
+    let t = title.to_string();
     view! {
         <div style="padding: 6px 12px; font-weight: 600; font-size: 12px; \
                      letter-spacing: 0.03em; text-transform: uppercase; color: #a1a1aa; \
                      border-bottom: 1px solid #27272a; border-radius: 8px 8px 0 0; \
                      background: #232327;">
-            {title}
+            {t}
         </div>
     }
 }
 
-#[component]
-fn NodePorts(
-    #[prop(optional)] inputs: Option<Children>,
-    #[prop(optional)] outputs: Option<Children>,
-) -> impl IntoView {
-    view! {
-        <div style="display: flex; justify-content: space-between; gap: 24px; padding: 8px 0;">
-            <div style="display: flex; flex-direction: column; gap: 2px;">
-                {inputs.map(|c| c())}
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 2px; align-items: flex-end;">
-                {outputs.map(|c| c())}
-            </div>
-        </div>
-    }
-}
 
 #[component]
 fn NodeContent(children: Children) -> impl IntoView {
@@ -207,271 +187,9 @@ struct DynNode {
     position: RwSignal<Position>,
 }
 
-static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(100);
 
-const GROUP_COLORS: &[&str] = &[
-    "#8b5cf6", "#22d3ee", "#f59e0b", "#10b981", "#ef4444", "#ec4899", "#6366f1", "#14b8a6",
-];
-
-fn random_group_color() -> String {
-    let n = NEXT_ID.load(std::sync::atomic::Ordering::Relaxed);
-    GROUP_COLORS[n % GROUP_COLORS.len()].into()
-}
-
-/// Generate a demo graph with the given number of nodes, connections, and groups.
-fn generate_demo_graph(
-    num_nodes: usize,
-    num_connections: usize,
-) -> (
-    Vec<DynNode>,
-    Vec<(String, ConnectionEntry<String, String>)>,
-    Vec<GroupBox<String>>,
-) {
-    let types = ["color_source", "mix", "math", "output"];
-    let cols = 10;
-    let col_spacing = 280.0;
-    let row_spacing = 220.0;
-
-    let mut nodes = Vec::new();
-    for i in 0..num_nodes {
-        let col = i % cols;
-        let row = i / cols;
-        let node_type = types[i % types.len()];
-        let id = format!("{}_{}", node_type, i);
-        nodes.push(DynNode {
-            id,
-            node_type: node_type.into(),
-            position: RwSignal::new(Position::new(
-                col as f64 * col_spacing + 50.0,
-                row as f64 * row_spacing + 50.0,
-            )),
-        });
-    }
-
-    // Simple deterministic "random" connections using a linear congruential generator
-    let mut seed: u64 = 42;
-    let mut rng = move || -> usize {
-        seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (seed >> 33) as usize
-    };
-
-    let port_map: HashMap<&str, (&[&str], &[&str])> = [
-        ("color_source", (&[][..], &["color", "alpha"][..])),
-        ("mix", (&["a", "b", "factor"][..], &["result"][..])),
-        ("math", (&["a", "b"][..], &["result"][..])),
-        ("output", (&["color", "value"][..], &[][..])),
-    ]
-    .into_iter()
-    .collect();
-
-    let mut connections = Vec::new();
-    let mut used_targets: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for c in 0..num_connections * 3 {
-        if connections.len() >= num_connections {
-            break;
-        }
-
-        let src_idx = rng() % num_nodes;
-        let dst_idx = rng() % num_nodes;
-        if src_idx == dst_idx {
-            continue;
-        }
-
-        let src_node = &nodes[src_idx];
-        let dst_node = &nodes[dst_idx];
-
-        let (_, src_outputs) = port_map.get(src_node.node_type.as_str()).unwrap();
-        let (dst_inputs, _) = port_map.get(dst_node.node_type.as_str()).unwrap();
-
-        if src_outputs.is_empty() || dst_inputs.is_empty() {
-            continue;
-        }
-
-        let src_port = src_outputs[rng() % src_outputs.len()];
-        let dst_port = dst_inputs[rng() % dst_inputs.len()];
-
-        let source = format!("{}_{}", src_node.id, src_port);
-        let target = format!("{}_{}", dst_node.id, dst_port);
-
-        // Only one connection per input
-        if used_targets.contains(&target) {
-            continue;
-        }
-        used_targets.insert(target.clone());
-
-        let conn_id = format!("conn_{}", c);
-        connections.push((
-            conn_id.clone(),
-            ConnectionEntry {
-                id: conn_id,
-                source,
-                target,
-            },
-        ));
-    }
-
-    // Generate groups: cluster every 2 rows into a group
-    let mut groups = Vec::new();
-    let rows = (num_nodes + cols - 1) / cols;
-    let group_size = 2; // rows per group
-    let mut group_idx = 0;
-    let mut row = 0;
-    while row < rows {
-        let end_row = (row + group_size).min(rows);
-        let start_idx = row * cols;
-        let end_idx = (end_row * cols).min(num_nodes);
-        if start_idx < end_idx {
-            let node_ids: Vec<String> = nodes[start_idx..end_idx]
-                .iter()
-                .map(|n| n.id.clone())
-                .collect();
-            let color = GROUP_COLORS[group_idx % GROUP_COLORS.len()];
-            groups.push(GroupBox {
-                id: format!("group_{}", group_idx),
-                node_ids,
-                label: Some(format!("Group {}", group_idx + 1)),
-                color: Some(color.into()),
-                error: false,
-            });
-            group_idx += 1;
-        }
-        row = end_row;
-    }
-
-    (nodes, connections, groups)
-}
-
-fn next_id(prefix: &str) -> String {
-    let n = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{prefix}_{n}")
-}
 
 /// The full node type catalog with port definitions.
-fn node_catalog() -> Vec<NodeMenuItem> {
-    vec![
-        NodeMenuItem {
-            id: "color_source".into(),
-            label: "Color Source".into(),
-            category: Some("Input".into()),
-            description: Some("Produces a color and alpha".into()),
-            ports: vec![
-                MenuPort {
-                    id: "color".into(),
-                    label: "Color".into(),
-                    direction: PortDirection::Output,
-                    type_id: "Color".into(),
-                },
-                MenuPort {
-                    id: "alpha".into(),
-                    label: "Alpha".into(),
-                    direction: PortDirection::Output,
-                    type_id: "Float".into(),
-                },
-            ],
-        },
-        NodeMenuItem {
-            id: "mix".into(),
-            label: "Mix".into(),
-            category: Some("Color".into()),
-            description: Some("Blend two colors".into()),
-            ports: vec![
-                MenuPort {
-                    id: "a".into(),
-                    label: "A".into(),
-                    direction: PortDirection::Input,
-                    type_id: "Color".into(),
-                },
-                MenuPort {
-                    id: "b".into(),
-                    label: "B".into(),
-                    direction: PortDirection::Input,
-                    type_id: "Color".into(),
-                },
-                MenuPort {
-                    id: "factor".into(),
-                    label: "Factor".into(),
-                    direction: PortDirection::Input,
-                    type_id: "Float".into(),
-                },
-                MenuPort {
-                    id: "result".into(),
-                    label: "Result".into(),
-                    direction: PortDirection::Output,
-                    type_id: "Color".into(),
-                },
-            ],
-        },
-        NodeMenuItem {
-            id: "math".into(),
-            label: "Math".into(),
-            category: Some("Math".into()),
-            description: Some("Arithmetic operation".into()),
-            ports: vec![
-                MenuPort {
-                    id: "a".into(),
-                    label: "A".into(),
-                    direction: PortDirection::Input,
-                    type_id: "Float".into(),
-                },
-                MenuPort {
-                    id: "b".into(),
-                    label: "B".into(),
-                    direction: PortDirection::Input,
-                    type_id: "Float".into(),
-                },
-                MenuPort {
-                    id: "result".into(),
-                    label: "Result".into(),
-                    direction: PortDirection::Output,
-                    type_id: "Float".into(),
-                },
-            ],
-        },
-        NodeMenuItem {
-            id: "output".into(),
-            label: "Output".into(),
-            category: Some("Output".into()),
-            description: Some("Final output destination".into()),
-            ports: vec![
-                MenuPort {
-                    id: "color".into(),
-                    label: "Color".into(),
-                    direction: PortDirection::Input,
-                    type_id: "Color".into(),
-                },
-                MenuPort {
-                    id: "value".into(),
-                    label: "Value".into(),
-                    direction: PortDirection::Input,
-                    type_id: "Any".into(),
-                },
-            ],
-        },
-        NodeMenuItem {
-            id: "custom".into(),
-            label: "Custom".into(),
-            category: Some("Utility".into()),
-            description: Some("Configurable inputs/outputs".into()),
-            ports: vec![
-                MenuPort {
-                    id: "in_0".into(),
-                    label: "In 0".into(),
-                    direction: PortDirection::Input,
-                    type_id: "Any".into(),
-                },
-                MenuPort {
-                    id: "out_0".into(),
-                    label: "Out 0".into(),
-                    direction: PortDirection::Output,
-                    type_id: "Any".into(),
-                },
-            ],
-        },
-    ]
-}
 
 #[component]
 fn App() -> impl IntoView {
@@ -504,11 +222,11 @@ fn App() -> impl IntoView {
                         || item
                             .category
                             .as_ref()
-                            .map_or(false, |c| c.to_lowercase().contains(&search))
+                            .is_some_and(|c| c.to_lowercase().contains(&search))
                         || item
                             .description
                             .as_ref()
-                            .map_or(false, |d| d.to_lowercase().contains(&search))
+                            .is_some_and(|d| d.to_lowercase().contains(&search))
                 })
                 .collect()
         }
@@ -619,11 +337,10 @@ fn App() -> impl IntoView {
         }
         GroupEvent::NodeAdded { group_id, node_id } => {
             groups.update(|gs| {
-                if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
-                    if !g.node_ids.contains(&node_id) {
+                if let Some(g) = gs.iter_mut().find(|g| g.id == group_id)
+                    && !g.node_ids.contains(&node_id) {
                         g.node_ids.push(node_id);
                     }
-                }
             });
         }
         GroupEvent::NodeRemoved { group_id, node_id } => {
@@ -689,15 +406,12 @@ fn ColorSourceNode(id: String, position: RwSignal<Position>) -> impl IntoView {
     let color_id = p("color");
     let alpha_id = p("alpha");
     view! {
-        <StyledNode id=id position=position>
-            <NodeHeader title="Color Source" />
-            <NodePorts
-                outputs=Box::new(move || view! {
-                    <OutputAnchor id=color_id.clone() port_type=DemoPort::Color _marker=ANCHOR_MARKER label="Color" />
-                    <OutputAnchor id=alpha_id.clone() port_type=DemoPort::Float _marker=ANCHOR_MARKER label="Alpha" />
-                }.into_any())
-            />
-        </StyledNode>
+        <Node id=id position=position _marker=NODE_MARKER
+            header=Box::new(|| header_view("Color Source").into_any())
+        >
+            <OutputAnchor id=color_id port_type=DemoPort::Color _marker=ANCHOR_MARKER label="Color" />
+            <OutputAnchor id=alpha_id port_type=DemoPort::Float _marker=ANCHOR_MARKER label="Alpha" />
+        </Node>
     }
 }
 
@@ -709,26 +423,23 @@ fn MixNode(id: String, position: RwSignal<Position>) -> impl IntoView {
     let factor_id = p("factor");
     let result_id = p("result");
     view! {
-        <StyledNode id=id position=position>
-            <NodeHeader title="Mix" />
-            <NodeContent>
-                <NodeField label="Blend">
-                    <Select options=vec!["Normal", "Multiply", "Screen", "Overlay", "Add"] />
-                </NodeField>
-            </NodeContent>
-            <NodePorts
-                inputs=Box::new(move || view! {
-                    <InputAnchor id=a_id.clone() port_type=DemoPort::Color _marker=ANCHOR_MARKER label="A" />
-                    <InputAnchor id=b_id.clone() port_type=DemoPort::Color _marker=ANCHOR_MARKER label="B" />
-                    <InputAnchor id=factor_id.clone() port_type=DemoPort::Float _marker=ANCHOR_MARKER>
-                        <NumberInput label="Factor" initial="0.5" />
-                    </InputAnchor>
-                }.into_any())
-                outputs=Box::new(move || view! {
-                    <OutputAnchor id=result_id.clone() port_type=DemoPort::Color _marker=ANCHOR_MARKER label="Result" />
-                }.into_any())
-            />
-        </StyledNode>
+        <Node id=id position=position _marker=NODE_MARKER
+            header=Box::new(|| header_view("Mix").into_any())
+            body=Box::new(|| view! {
+                <NodeContent>
+                    <NodeField label="Blend">
+                        <Select options=vec!["Normal", "Multiply", "Screen", "Overlay", "Add"] />
+                    </NodeField>
+                </NodeContent>
+            }.into_any())
+        >
+            <InputAnchor id=a_id port_type=DemoPort::Color _marker=ANCHOR_MARKER label="A" />
+            <InputAnchor id=b_id port_type=DemoPort::Color _marker=ANCHOR_MARKER label="B" />
+            <InputAnchor id=factor_id port_type=DemoPort::Float _marker=ANCHOR_MARKER>
+                <NumberInput label="Factor" initial="0.5" />
+            </InputAnchor>
+            <OutputAnchor id=result_id port_type=DemoPort::Color _marker=ANCHOR_MARKER label="Result" />
+        </Node>
     }
 }
 
@@ -739,22 +450,17 @@ fn MathNode(id: String, position: RwSignal<Position>) -> impl IntoView {
     let b_id = p("b");
     let result_id = p("result");
     view! {
-        <StyledNode id=id position=position>
-            <NodeHeader title="Math" />
-            <NodePorts
-                inputs=Box::new(move || view! {
-                    <InputAnchor id=a_id.clone() port_type=DemoPort::Float _marker=ANCHOR_MARKER>
-                        <NumberInput label="A" />
-                    </InputAnchor>
-                    <InputAnchor id=b_id.clone() port_type=DemoPort::Float _marker=ANCHOR_MARKER>
-                        <NumberInput label="B" />
-                    </InputAnchor>
-                }.into_any())
-                outputs=Box::new(move || view! {
-                    <OutputAnchor id=result_id.clone() port_type=DemoPort::Float _marker=ANCHOR_MARKER label="Result" />
-                }.into_any())
-            />
-        </StyledNode>
+        <Node id=id position=position _marker=NODE_MARKER
+            header=Box::new(|| header_view("Math").into_any())
+        >
+            <InputAnchor id=a_id port_type=DemoPort::Float _marker=ANCHOR_MARKER>
+                <NumberInput label="A" />
+            </InputAnchor>
+            <InputAnchor id=b_id port_type=DemoPort::Float _marker=ANCHOR_MARKER>
+                <NumberInput label="B" />
+            </InputAnchor>
+            <OutputAnchor id=result_id port_type=DemoPort::Float _marker=ANCHOR_MARKER label="Result" />
+        </Node>
     }
 }
 
@@ -764,15 +470,12 @@ fn OutputNode(id: String, position: RwSignal<Position>) -> impl IntoView {
     let color_id = p("color");
     let value_id = p("value");
     view! {
-        <StyledNode id=id position=position>
-            <NodeHeader title="Output" />
-            <NodePorts
-                inputs=Box::new(move || view! {
-                    <InputAnchor id=color_id.clone() port_type=DemoPort::Color _marker=ANCHOR_MARKER label="Color" />
-                    <InputAnchor id=value_id.clone() port_type=DemoPort::Any _marker=ANCHOR_MARKER label="Value" />
-                }.into_any())
-            />
-        </StyledNode>
+        <Node id=id position=position _marker=NODE_MARKER
+            header=Box::new(|| header_view("Output").into_any())
+        >
+            <InputAnchor id=color_id port_type=DemoPort::Color _marker=ANCHOR_MARKER label="Color" />
+            <InputAnchor id=value_id port_type=DemoPort::Any _marker=ANCHOR_MARKER label="Value" />
+        </Node>
     }
 }
 
@@ -784,72 +487,69 @@ fn CustomNode(id: String, position: RwSignal<Position>) -> impl IntoView {
     let id_out = id.clone();
 
     view! {
-        <StyledNode id=id position=position>
-            <NodeHeader title="Custom" />
-            <NodeContent>
-                <NodeField label="Inputs">
-                    <select
-                        style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
-                               border-radius: 4px; color: #d4d4d8; font-size: 11px; \
-                               padding: 3px 6px; outline: none; cursor: pointer;"
-                        on:change=move |ev| {
-                            use leptos::wasm_bindgen::JsCast;
-                            let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>();
-                            if let Ok(n) = t.value().parse::<usize>() {
-                                set_num_inputs.set(n);
+        <Node id=id position=position _marker=NODE_MARKER
+            header=Box::new(|| header_view("Custom").into_any())
+            body=Box::new(move || view! {
+                <NodeContent>
+                    <NodeField label="Inputs">
+                        <select
+                            style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
+                                   border-radius: 4px; color: #d4d4d8; font-size: 11px; \
+                                   padding: 3px 6px; outline: none; cursor: pointer;"
+                            on:change=move |ev| {
+                                use leptos::wasm_bindgen::JsCast;
+                                let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>();
+                                if let Ok(n) = t.value().parse::<usize>() {
+                                    set_num_inputs.set(n);
+                                }
                             }
-                        }
-                    >
-                        {(0..=8).map(|n| {
-                            view! { <option value=n.to_string() selected={n == 2}>{n.to_string()}</option> }
-                        }).collect_view()}
-                    </select>
-                </NodeField>
-                <NodeField label="Outputs">
-                    <select
-                        style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
-                               border-radius: 4px; color: #d4d4d8; font-size: 11px; \
-                               padding: 3px 6px; outline: none; cursor: pointer;"
-                        on:change=move |ev| {
-                            use leptos::wasm_bindgen::JsCast;
-                            let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>();
-                            if let Ok(n) = t.value().parse::<usize>() {
-                                set_num_outputs.set(n);
+                        >
+                            {(0..=8).map(|n| {
+                                view! { <option value=n.to_string() selected={n == 2}>{n.to_string()}</option> }
+                            }).collect_view()}
+                        </select>
+                    </NodeField>
+                    <NodeField label="Outputs">
+                        <select
+                            style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
+                                   border-radius: 4px; color: #d4d4d8; font-size: 11px; \
+                                   padding: 3px 6px; outline: none; cursor: pointer;"
+                            on:change=move |ev| {
+                                use leptos::wasm_bindgen::JsCast;
+                                let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>();
+                                if let Ok(n) = t.value().parse::<usize>() {
+                                    set_num_outputs.set(n);
+                                }
                             }
-                        }
-                    >
-                        {(0..=8).map(|n| {
-                            view! { <option value=n.to_string() selected={n == 1}>{n.to_string()}</option> }
-                        }).collect_view()}
-                    </select>
-                </NodeField>
-            </NodeContent>
-            <div style="display: flex; justify-content: space-between; gap: 24px; padding: 8px 0;">
-                <div style="display: flex; flex-direction: column; gap: 2px;">
-                    {move || {
-                        let n = num_inputs.get();
-                        let id = id_in.clone();
-                        (0..n).map(|i| {
-                            let port_id = format!("{}_in_{}", id, i);
-                            view! {
-                                <InputAnchor id=port_id port_type=DemoPort::Any _marker=ANCHOR_MARKER label=format!("In {i}") />
-                            }
-                        }).collect_view()
-                    }}
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 2px; align-items: flex-end;">
-                    {move || {
-                        let n = num_outputs.get();
-                        let id = id_out.clone();
-                        (0..n).map(|i| {
-                            let port_id = format!("{}_out_{}", id, i);
-                            view! {
-                                <OutputAnchor id=port_id port_type=DemoPort::Any _marker=ANCHOR_MARKER label=format!("Out {i}") />
-                            }
-                        }).collect_view()
-                    }}
-                </div>
-            </div>
-        </StyledNode>
+                        >
+                            {(0..=8).map(|n| {
+                                view! { <option value=n.to_string() selected={n == 1}>{n.to_string()}</option> }
+                            }).collect_view()}
+                        </select>
+                    </NodeField>
+                </NodeContent>
+            }.into_any())
+        >
+            {move || {
+                let n = num_inputs.get();
+                let id = id_in.clone();
+                (0..n).map(|i| {
+                    let port_id = format!("{}_in_{}", id, i);
+                    view! {
+                        <InputAnchor id=port_id port_type=DemoPort::Any _marker=ANCHOR_MARKER label=format!("In {i}") />
+                    }
+                }).collect_view()
+            }}
+            {move || {
+                let n = num_outputs.get();
+                let id = id_out.clone();
+                (0..n).map(|i| {
+                    let port_id = format!("{}_out_{}", id, i);
+                    view! {
+                        <OutputAnchor id=port_id port_type=DemoPort::Any _marker=ANCHOR_MARKER label=format!("Out {i}") />
+                    }
+                }).collect_view()
+            }}
+        </Node>
     }
 }

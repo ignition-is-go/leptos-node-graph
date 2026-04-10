@@ -88,7 +88,14 @@ pub struct AnchorStyle {
     pub label_color: String,
     /// Label color when compatible.
     pub label_compatible_color: String,
-    /// Row padding.
+    /// Fixed row height in pixels. Children cannot exceed this.
+    pub row_height: f64,
+    /// Y offset from node top to the center of the first port.
+    /// Typically header_height + padding + row_height/2.
+    pub first_port_y: f64,
+    /// X inset from node edge for the dot center (input ports from left, output from right).
+    pub dot_inset: f64,
+    /// Row padding (CSS).
     pub row_padding: String,
     /// Row gap between dot and label.
     pub row_gap: String,
@@ -114,7 +121,10 @@ impl Default for AnchorStyle {
             label_font_size: "11px".into(),
             label_color: "#a1a1aa".into(),
             label_compatible_color: "#22d3ee".into(),
-            row_padding: "4px 10px".into(),
+            row_height: 24.0,
+            first_port_y: 0.0, // computed from header+body measurements
+            dot_inset: 14.0,
+            row_padding: "0 10px".into(),
             row_gap: "6px".into(),
             incompatible_opacity: 0.25,
             tooltip_background: "#27272a".into(),

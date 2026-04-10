@@ -147,71 +147,41 @@ where
         reg_cleanup.deregister_port(&id_cleanup);
     });
 
-    // Update port position when node position changes.
-    // Uses cached offset when available; re-measures from DOM when invalidated.
+    // Deterministic port position calculation — no DOM measurement needed.
+    // Uses node position, measured header/body heights, slot index, and row height.
     let reg_pos = registry.clone();
     let id_pos = id.clone();
+    let anchor_style = use_context::<crate::theme::AnchorStyle>().unwrap_or_default();
+    let row_h = anchor_style.row_height;
+    let dot_inset = anchor_style.dot_inset;
+
     Effect::new(move || {
         let node_pos = node_ctx.position.get();
+        let ports_y = node_ctx.ports_y_offset.get();
+        let nw = node_ctx.node_width.get();
 
-        // Check if we have a cached offset
-        let offset = reg_pos
-            .ports
-            .with_untracked(|ports| ports.get(&id_pos).and_then(|p| p.offset));
+        // Get this port's slot index
+        let slot_idx = reg_pos.ports.with_untracked(|ports| {
+            ports.get(&id_pos).map(|p| p.slot_index).unwrap_or(0)
+        });
 
-        if let Some(offset) = offset {
-            // Use cached offset (fast path — no DOM query)
-            let is_dragging = reg_pos.drag_state.with_untracked(|ds| ds.is_some());
-            if is_dragging {
-                return; // batch_set_positions already handled this
-            }
-            let canvas_pos = Position::new(node_pos.x + offset.x, node_pos.y + offset.y);
-            reg_pos.set_port_position(&id_pos, canvas_pos);
-            return;
+        let is_dragging = reg_pos.drag_state.with_untracked(|ds| ds.is_some());
+        if is_dragging {
+            return; // batch_set_positions handles this
         }
 
-        // No cached offset — measure from DOM (first render or after invalidation)
-        // Use RAF to ensure DOM has settled after port add/remove
-        let reg = reg_pos.clone();
-        let id = id_pos.clone();
-        let nid = node_ctx.id.clone();
-        crate::raf::request_animation_frame(move || {
-            let node_pos = reg.nodes.with_untracked(|nodes| {
-                nodes
-                    .get(&nid)
-                    .map(|n| {
-                        n.position_signal
-                            .map(|s| s.get_untracked())
-                            .unwrap_or(n.position)
-                    })
-                    .unwrap_or_default()
-            });
+        let y = node_pos.y + ports_y + (slot_idx as f64 * row_h) + (row_h / 2.0);
+        let x = match direction {
+            PortDirection::Input => node_pos.x + dot_inset,
+            PortDirection::Output => node_pos.x + nw - dot_inset,
+        };
 
-            if let Some(dot_el) = dot_ref.get_untracked() {
-                let container_rect = dot_el
-                    .closest(".node-editor")
-                    .ok()
-                    .flatten()
-                    .map(|c| c.get_bounding_client_rect());
+        let canvas_pos = Position::new(x, y);
+        reg_pos.set_port_position(&id_pos, canvas_pos);
 
-                if let Some(container_rect) = container_rect {
-                    let port_rect = dot_el.get_bounding_client_rect();
-                    let viewport = reg.viewport.get_untracked();
-
-                    let screen_x =
-                        port_rect.left() + port_rect.width() / 2.0 - container_rect.left();
-                    let screen_y =
-                        port_rect.top() + port_rect.height() / 2.0 - container_rect.top();
-
-                    let canvas_pos = viewport.screen_to_canvas(Position::new(screen_x, screen_y));
-                    reg.set_port_position(&id, canvas_pos);
-
-                    let offset =
-                        Position::new(canvas_pos.x - node_pos.x, canvas_pos.y - node_pos.y);
-                    reg.set_port_offset(&id, offset);
-                }
-            }
-        });
+        // Store offset for batch_set_positions during drag
+        let offset = Position::new(x - node_pos.x, y - node_pos.y);
+        reg_pos.set_port_offset(&id_pos, offset);
     });
 
     // Mousedown: start a draft from any port, or click-complete an existing draft
@@ -233,7 +203,7 @@ where
                 // Start a new draft — only from the dot element
                 let on_dot = if let Some(target) = ev.target() {
                     use leptos::wasm_bindgen::JsCast;
-                    target.dyn_ref::<web_sys::Element>().map_or(false, |el| {
+                    target.dyn_ref::<web_sys::Element>().is_some_and(|el| {
                         el.closest("[data-anchor-dot]").ok().flatten().is_some()
                     })
                 } else {
@@ -299,11 +269,10 @@ where
         leptos::ev::mouseup,
         move |ev: web_sys::MouseEvent| {
             let has_draft = reg_mu.draft_connection.with_untracked(|d| d.is_some());
-            if has_draft {
-                if try_complete_connection(&reg_mu, &id_mu, direction) {
+            if has_draft
+                && try_complete_connection(&reg_mu, &id_mu, direction) {
                     ev.stop_propagation();
                 }
-            }
         },
     );
 
@@ -373,7 +342,7 @@ where
     let is_source = Signal::derive(move || {
         reg_source
             .draft_connection
-            .with(|d| d.as_ref().map_or(false, |d| d.source_port == id_source))
+            .with(|d| d.as_ref().is_some_and(|d| d.source_port == id_source))
     });
 
     let id_conn = id.clone();
@@ -487,7 +456,7 @@ where
     let menu_state = AnchorMenuState {
         position: ctx_menu_pos,
         items: menu_items,
-        on_action: on_action.clone(),
+        on_action,
         on_close,
     };
     provide_context(menu_state);
@@ -592,8 +561,9 @@ where
 
         format!(
             "display: flex; align-items: center; gap: {}; padding: {}; \
+             height: {}px; overflow: hidden; \
              cursor: default; transition: opacity 0.15s; opacity: {opacity}; {pointer} {dir}",
-            as2.row_gap, as2.row_padding,
+            as2.row_gap, as2.row_padding, as2.row_height,
         )
     };
 
@@ -648,7 +618,7 @@ where
     let ctx_menu_view = move || {
         let pos = ctx_menu_pos.get()?;
         let items = menu_items.get();
-        let on_act = on_action.clone();
+        let on_act = on_action;
 
         let style = format!(
             "position: fixed; left: {}px; top: {}px; z-index: 10001; \
@@ -661,7 +631,6 @@ where
             <div style=style data-anchor-menu="">
                 {items.into_iter().map(|item| {
                     let action = item.action.clone();
-                    let on_act = on_act.clone();
                     let enabled = item.enabled;
                     let item_style = if enabled {
                         format!("padding: 6px 12px; cursor: pointer; font-size: 12px; color: {};", ms.item_color)

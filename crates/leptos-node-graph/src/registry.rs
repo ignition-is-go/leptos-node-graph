@@ -278,12 +278,11 @@ where
             updates.iter().map(|(id, pos)| (id, pos)).collect();
         self.ports.update(|ports| {
             for entry in ports.values_mut() {
-                if let Some(new_node_pos) = update_map.get(&entry.node_id) {
-                    if let Some(offset) = entry.offset {
+                if let Some(new_node_pos) = update_map.get(&entry.node_id)
+                    && let Some(offset) = entry.offset {
                         entry.position =
                             Position::new(new_node_pos.x + offset.x, new_node_pos.y + offset.y);
                     }
-                }
             }
         });
 
