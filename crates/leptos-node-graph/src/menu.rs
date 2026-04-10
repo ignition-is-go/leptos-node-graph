@@ -25,7 +25,7 @@ pub struct NodeMenuItem {
     pub category: Option<String>,
     /// Optional description shown below the label.
     pub description: Option<String>,
-    /// Ports this node type has. Shown as sub-items when menu is opened during a draft connection.
+    /// Ports this node type has.
     pub ports: Vec<MenuPort>,
 }
 
@@ -33,8 +33,6 @@ pub struct NodeMenuItem {
 #[derive(Clone, Debug)]
 pub enum NodeMenuEvent {
     /// User selected a node type to create at this canvas position.
-    /// If `connect_to_port` is Some, the consumer should also create a connection
-    /// between the draft source and this port on the new node.
     CreateNode {
         item_id: String,
         position: Position,
@@ -47,36 +45,31 @@ pub enum NodeMenuEvent {
 /// Context for controlling the node menu from outside.
 #[derive(Clone)]
 pub struct NodeMenuContext {
-    /// Set to Some(position) to open the menu at that canvas position. None to close.
     pub open_at: RwSignal<Option<Position>>,
 }
 
-/// Whether the menu was opened during a draft connection, and from which direction.
+/// Whether the menu was opened during a draft connection.
 #[derive(Clone, Debug)]
 pub struct DraftContext {
-    /// The direction of the port that started the draft.
-    /// The menu will show ports of the OPPOSITE direction as connectable sub-items.
     pub origin_direction: PortDirection,
 }
 
 /// A searchable node creation menu.
 ///
-/// When opened during a draft connection, compatible ports are shown as sub-items.
-/// Selecting a port creates the node AND completes the connection in one action.
+/// When opened during a draft connection, compatible ports are shown inline.
 #[component]
 pub fn NodeMenu(
-    /// Reactive list of menu items. Consumer filters these based on search_text.
+    /// Reactive list of menu items.
     items: Signal<Vec<NodeMenuItem>>,
-    /// Two-way search text signal. Menu writes to it as user types.
+    /// Two-way search text signal.
     search_text: RwSignal<String>,
     /// Callback when item is selected or menu is cancelled.
     on_event: Callback<NodeMenuEvent>,
     /// Canvas position to open the menu at. None = closed.
     open_at: RwSignal<Option<Position>>,
-    /// Current viewport transform for canvas-to-screen conversion.
+    /// Current viewport transform.
     viewport: Signal<ViewportTransform>,
-    /// If set, the menu was opened during a draft connection.
-    /// Ports of the opposite direction will be shown as connectable sub-items.
+    /// If set, menu was opened during a draft connection.
     #[prop(optional, into)]
     draft_context: Signal<Option<DraftContext>>,
 ) -> impl IntoView
@@ -85,29 +78,26 @@ pub fn NodeMenu(
 
     let input_ref = NodeRef::<leptos::html::Input>::new();
     let (selected_index, set_selected_index) = signal(0usize);
-    // When a node item is expanded, show its ports. None = no expansion.
-    let (expanded_item, set_expanded_item) = signal(Option::<usize>::None);
 
-    // Reset state when menu opens
+    // Focus input when menu opens
     Effect::new(move || {
         if open_at.get().is_some() {
             search_text.set(String::new());
             set_selected_index.set(0);
-            set_expanded_item.set(None);
             request_animation_frame(move || {
-                if let Some(el) = input_ref.get() {
+                if let Some(el) = input_ref.get_untracked() {
                     let _ = el.focus();
                 }
             });
         }
     });
 
-    // Close on click outside
+    // Close on Escape or click outside (native listener so it works reliably)
     let on_event_close = on_event.clone();
     let _ = use_event_listener(
         leptos::prelude::document(),
-        leptos::ev::mousedown,
-        move |ev: web_sys::MouseEvent| {
+        leptos::ev::pointerdown,
+        move |ev: web_sys::PointerEvent| {
             if open_at.get_untracked().is_none() {
                 return;
             }
@@ -124,8 +114,24 @@ pub fn NodeMenu(
         },
     );
 
+    // Helper: emit create event and close menu
+    let emit_create = {
+        let on_event = on_event.clone();
+        move |item_id: String, port_id: Option<String>| {
+            if let Some(pos) = open_at.get_untracked() {
+                on_event.run(NodeMenuEvent::CreateNode {
+                    item_id,
+                    position: pos,
+                    connect_to_port: port_id,
+                });
+                open_at.set(None);
+            }
+        }
+    };
+
     // Keyboard handler
     let on_event_key = on_event.clone();
+    let emit_create_key = emit_create.clone();
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         let item_count = items.with_untracked(|items| items.len());
 
@@ -140,47 +146,26 @@ pub fn NodeMenu(
                 ev.prevent_default();
                 set_selected_index.update(|i| *i = i.saturating_sub(1));
             }
-            "ArrowRight" => {
-                // Expand to show ports if in draft context
-                let dc = draft_context.get_untracked();
-                if dc.is_some() {
-                    let idx = selected_index.get_untracked();
-                    set_expanded_item.set(Some(idx));
-                }
-            }
-            "ArrowLeft" => {
-                set_expanded_item.set(None);
-            }
             "Enter" => {
                 ev.prevent_default();
                 let idx = selected_index.get_untracked();
                 let item = items.with_untracked(|items| items.get(idx).cloned());
                 if let Some(item) = item {
-                    if let Some(pos) = open_at.get_untracked() {
-                        let dc = draft_context.get_untracked();
-                        let connect_port = if dc.is_some() {
-                            // Auto-select first compatible port
-                            let target_dir = match dc.unwrap().origin_direction {
-                                PortDirection::Output => PortDirection::Input,
-                                PortDirection::Input => PortDirection::Output,
-                            };
-                            item.ports.iter()
-                                .find(|p| p.direction == target_dir)
-                                .map(|p| p.id.clone())
-                        } else {
-                            None
+                    let dc = draft_context.get_untracked();
+                    let connect_port = dc.and_then(|dc| {
+                        let target_dir = match dc.origin_direction {
+                            PortDirection::Output => PortDirection::Input,
+                            PortDirection::Input => PortDirection::Output,
                         };
-
-                        on_event_key.run(NodeMenuEvent::CreateNode {
-                            item_id: item.id,
-                            position: pos,
-                            connect_to_port: connect_port,
-                        });
-                        open_at.set(None);
-                    }
+                        item.ports.iter()
+                            .find(|p| p.direction == target_dir)
+                            .map(|p| p.id.clone())
+                    });
+                    emit_create_key(item.id, connect_port);
                 }
             }
-            "Escape" => {
+            "Escape" | "Tab" => {
+                ev.prevent_default();
                 open_at.set(None);
                 on_event_key.run(NodeMenuEvent::Cancelled);
             }
@@ -195,7 +180,6 @@ pub fn NodeMenu(
         if current >= count && count > 0 {
             set_selected_index.set(count - 1);
         }
-        set_expanded_item.set(None);
     });
 
     move || {
@@ -211,10 +195,7 @@ pub fn NodeMenu(
 
         let current_items = items.get();
         let selected = selected_index.get();
-        let expanded = expanded_item.get();
         let dc = draft_context.get();
-
-        let on_event_click = on_event.clone();
 
         Some(view! {
             <div style=menu_style data-node-menu="">
@@ -237,7 +218,6 @@ pub fn NodeMenu(
                                     .unchecked_into::<web_sys::HtmlInputElement>();
                                 search_text.set(t.value());
                                 set_selected_index.set(0);
-                                set_expanded_item.set(None);
                             }
                             on:keydown=on_keydown
                         />
@@ -257,9 +237,8 @@ pub fn NodeMenu(
                                 .enumerate()
                                 .map(|(i, item)| {
                                     let is_selected = i == selected;
-                                    let is_expanded = expanded == Some(i);
-                                    let on_ev = on_event_click.clone();
                                     let dc_inner = dc.clone();
+                                    let emit = emit_create.clone();
 
                                     // Category header
                                     let cat_header = if item.category != last_category {
@@ -283,20 +262,15 @@ pub fn NodeMenu(
                                         ""
                                     };
 
-                                    let has_ports = dc_inner.is_some() && !item.ports.is_empty();
-                                    let arrow = if has_ports { " ›" } else { "" };
-
                                     let item_style = format!(
                                         "padding: 6px 12px; cursor: pointer; font-size: 12px; \
-                                         color: #d4d4d8; display: flex; justify-content: space-between; \
-                                         align-items: center; {item_bg}"
+                                         color: #d4d4d8; {item_bg}"
                                     );
 
                                     let desc = item.description.clone();
                                     let item_id = item.id.clone();
-                                    let item_ports = item.ports.clone();
 
-                                    // Determine which ports to show as sub-items
+                                    // Compatible ports for draft mode
                                     let target_dir = dc_inner.as_ref().map(|dc| {
                                         match dc.origin_direction {
                                             PortDirection::Output => PortDirection::Input,
@@ -305,7 +279,7 @@ pub fn NodeMenu(
                                     });
 
                                     let compatible_ports: Vec<_> = if let Some(dir) = target_dir {
-                                        item_ports.iter()
+                                        item.ports.iter()
                                             .filter(|p| p.direction == dir)
                                             .cloned()
                                             .collect()
@@ -313,89 +287,72 @@ pub fn NodeMenu(
                                         vec![]
                                     };
 
-                                    let on_ev_item = on_ev.clone();
+                                    // Auto-connect port for single-port or no-draft cases
+                                    let auto_port = if compatible_ports.len() == 1 {
+                                        Some(compatible_ports[0].id.clone())
+                                    } else {
+                                        None
+                                    };
+
+                                    // Node item click handler
+                                    let emit_item = emit.clone();
                                     let item_id_click = item_id.clone();
+                                    let auto_port_click = auto_port.clone();
+                                    let has_multi_ports = compatible_ports.len() > 1;
+
+                                    // Port sub-items (always visible inline in draft mode)
+                                    let port_views = if compatible_ports.len() > 1 {
+                                        let ports_html: Vec<_> = compatible_ports.into_iter().map(|port| {
+                                            let emit_port = emit.clone();
+                                            let iid = item_id.clone();
+                                            let pid = port.id.clone();
+                                            let dir_icon = match port.direction {
+                                                PortDirection::Input => "› ",
+                                                PortDirection::Output => "‹ ",
+                                            };
+                                            let pid_click = pid.clone();
+                                            let iid_click = iid.clone();
+                                            view! {
+                                                <div
+                                                    style="padding: 3px 4px 3px 20px; cursor: pointer; \
+                                                           font-size: 11px; color: #a1a1aa;"
+                                                    on:click=move |ev: web_sys::MouseEvent| {
+                                                        ev.stop_propagation();
+                                                        ev.prevent_default();
+                                                        emit_port(iid_click.clone(), Some(pid_click.clone()));
+                                                    }
+                                                >
+                                                    {dir_icon}{port.label}
+                                                </div>
+                                            }
+                                        }).collect();
+                                        Some(ports_html.into_iter().collect_view())
+                                    } else {
+                                        None
+                                    };
 
                                     view! {
                                         {cat_header}
                                         <div
                                             style=item_style
-                                            on:mousedown=move |ev: web_sys::MouseEvent| {
+                                            on:click=move |ev: web_sys::MouseEvent| {
                                                 ev.stop_propagation();
-                                                if compatible_ports.is_empty() {
-                                                    // No ports to pick — just create the node
-                                                    if let Some(pos) = open_at.get_untracked() {
-                                                        on_ev_item.run(NodeMenuEvent::CreateNode {
-                                                            item_id: item_id_click.clone(),
-                                                            position: pos,
-                                                            connect_to_port: None,
-                                                        });
-                                                        open_at.set(None);
-                                                    }
-                                                } else {
-                                                    // Expand to show port sub-items
-                                                    set_expanded_item.set(Some(i));
-                                                }
+                                                // Don't fire if we have multiple ports (user should pick one)
+                                                if has_multi_ports { return; }
+                                                emit_item(item_id_click.clone(), auto_port_click.clone());
                                             }
                                             on:mouseenter=move |_| {
                                                 set_selected_index.set(i);
                                             }
                                         >
-                                            <div>
-                                                {item.label}
-                                                {desc.map(|d| view! {
-                                                    <div style="font-size: 10px; color: #71717a; margin-top: 2px;">
-                                                        {d}
-                                                    </div>
-                                                })}
-                                            </div>
-                                            <span style="color: #52525b; font-size: 14px;">{arrow}</span>
+                                            {item.label}
+                                            {desc.map(|d| view! {
+                                                <div style="font-size: 10px; color: #71717a; margin-top: 2px;">
+                                                    {d}
+                                                </div>
+                                            })}
+                                            {port_views}
                                         </div>
-                                        // Port sub-items when expanded
-                                        {if is_expanded && !item_ports.is_empty() {
-                                            let target_dir2 = target_dir;
-                                            let ports: Vec<_> = item_ports.iter()
-                                                .filter(|p| target_dir2.map_or(true, |d| p.direction == d))
-                                                .cloned()
-                                                .collect();
-
-                                            if ports.is_empty() {
-                                                None
-                                            } else {
-                                                let on_ev_port = on_ev.clone();
-                                                let item_id_port = item_id.clone();
-                                                Some(ports.into_iter().map(move |port| {
-                                                    let on_ev_p = on_ev_port.clone();
-                                                    let iid = item_id_port.clone();
-                                                    let pid = port.id.clone();
-                                                    let dir_icon = match port.direction {
-                                                        PortDirection::Input => "› ",
-                                                        PortDirection::Output => "‹ ",
-                                                    };
-                                                    view! {
-                                                        <div
-                                                            style="padding: 4px 12px 4px 28px; cursor: pointer; \
-                                                                   font-size: 11px; color: #a1a1aa;"
-                                                            on:mousedown=move |ev: web_sys::MouseEvent| {
-                                                                ev.stop_propagation();
-                                                                if let Some(pos) = open_at.get_untracked() {
-                                                                    on_ev_p.run(NodeMenuEvent::CreateNode {
-                                                                        item_id: iid.clone(),
-                                                                        position: pos,
-                                                                        connect_to_port: Some(pid.clone()),
-                                                                    });
-                                                                    open_at.set(None);
-                                                                }
-                                                            }
-                                                        >
-                                                            {dir_icon}{port.label}
-                                                        </div>
-                                                    }
-                                                }).collect_view())
-                                            }
-                                        } else {
-                                            None
-                                        }}
                                     }
                                 })
                                 .collect_view()

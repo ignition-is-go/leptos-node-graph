@@ -99,6 +99,22 @@ where
     Undo,
     Redo,
     GroupCreated { node_ids: Vec<N> },
+    /// User selected a node type from the creation menu.
+    /// Consumer should create the node, and if `connect_from`/`connect_to` are set,
+    /// also create a connection between them.
+    CreateNode {
+        /// The menu item id (node type).
+        item_id: String,
+        /// Canvas position where the node should be created.
+        position: Position,
+        /// The port that initiated the draft connection (if menu was opened during a drag).
+        connect_from: Option<P>,
+        /// The port id on the new node to connect to (e.g. "a", "result").
+        /// Consumer prefixes this with the new node's id.
+        connect_to: Option<String>,
+        /// Direction of the draft origin, so consumer knows output→input order.
+        connect_direction: Option<PortDirection>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -192,14 +192,22 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
         }
     }
 
-    // Cancel draft connection only if mouseup was NOT on an anchor
-    // (clicking an anchor to complete a connection is handled by the anchor's mousedown)
+    // Cancel draft connection only if mouseup was NOT on an anchor or the node menu
     if let Some(target) = ev.target() {
         use leptos::wasm_bindgen::JsCast;
         if let Some(el) = target.dyn_ref::<web_sys::Element>() {
             let is_anchor: bool = el.closest("[data-anchor]").ok().flatten().is_some();
-            if !is_anchor {
-                registry.draft_connection.set(None);
+            let is_menu: bool = el.closest("[data-node-menu]").ok().flatten().is_some();
+            if !is_anchor && !is_menu {
+                // Also check if a menu is currently open anywhere in the document
+                let menu_open: bool = leptos::prelude::document()
+                    .query_selector("[data-node-menu]")
+                    .ok()
+                    .flatten()
+                    .is_some();
+                if !menu_open {
+                    registry.draft_connection.set(None);
+                }
             }
         } else {
             registry.draft_connection.set(None);
@@ -252,6 +260,7 @@ pub fn handle_wheel<N, P, C, T>(
 pub fn handle_keydown<N, P, C, T>(
     registry: &EditorRegistry<N, P, C, T>,
     ev: KeyboardEvent,
+    _container_ref: &NodeRef<leptos::html::Div>,
 ) where
     N: NodeId,
     P: PortId,
@@ -303,6 +312,7 @@ pub fn handle_keydown<N, P, C, T>(
             registry.draft_connection.set(None);
             registry.clear_selection();
         }
+        // Tab is handled by the editor directly (opens menu)
         _ => {}
     }
 }

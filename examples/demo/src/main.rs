@@ -389,12 +389,8 @@ fn App() -> impl IntoView {
         DynNode { id: "output_0".into(), node_type: "output".into(), position: RwSignal::new(Position::new(650.0, 100.0)) },
     ]);
 
-    // Node menu state
-    let menu_open_at: RwSignal<Option<Position>> = RwSignal::new(None);
-    let menu_search: RwSignal<String> = RwSignal::new(String::new());
-    let draft_ctx: RwSignal<Option<DraftContext>> = RwSignal::new(None);
-
     // Filtered catalog based on search
+    let menu_search: RwSignal<String> = RwSignal::new(String::new());
     let catalog = node_catalog();
     let menu_items = Signal::derive(move || {
         let search = menu_search.get().to_lowercase();
@@ -428,40 +424,32 @@ fn App() -> impl IntoView {
             GraphEvent::NodesDeleted { ids } => {
                 nodes.update(|ns| ns.retain(|n| !ids.contains(&n.id)));
             }
-            other => {
-                console::log_1(&format!("Graph event: {:?}", other).into());
-            }
-        })
-    };
-
-    // Menu event handler — creates nodes and optionally connects them
-    let on_menu_event = {
-        let _connections = connections;
-        let draft_ctx = draft_ctx;
-        Callback::new(move |event: NodeMenuEvent| match event {
-            NodeMenuEvent::CreateNode { item_id, position, connect_to_port } => {
+            GraphEvent::CreateNode { item_id, position, connect_from, connect_to, connect_direction } => {
                 let node_id = next_id(&item_id);
                 nodes.update(|ns| {
                     ns.push(DynNode {
                         id: node_id.clone(),
-                        node_type: item_id.clone(),
+                        node_type: item_id,
                         position: RwSignal::new(position),
                     });
                 });
 
-                // If a port was selected during a draft connection, create the connection
-                if let Some(port_id) = connect_to_port {
-                    let full_port_id = format!("{}_{}", node_id, port_id);
-                    // The draft context tells us which direction the draft came from
-                    // We need to get the draft source port from the registry
-                    // For now, emit a log — the consumer would wire this up with their registry
-                    console::log_1(&format!("Connect to port: {}", full_port_id).into());
+                // Wire connection if menu was opened during a draft
+                if let (Some(draft_port), Some(new_port)) = (connect_from, connect_to) {
+                    let new_port_id = format!("{}_{}", node_id, new_port);
+                    let (source, target) = match connect_direction {
+                        Some(PortDirection::Output) => (draft_port, new_port_id),
+                        Some(PortDirection::Input) => (new_port_id, draft_port),
+                        None => (draft_port, new_port_id),
+                    };
+                    connections.update(|map| {
+                        let id = next_id("conn");
+                        map.insert(id.clone(), ConnectionEntry { id, source, target });
+                    });
                 }
-
-                draft_ctx.set(None);
             }
-            NodeMenuEvent::Cancelled => {
-                draft_ctx.set(None);
+            other => {
+                console::log_1(&format!("Graph event: {:?}", other).into());
             }
         })
     };
@@ -525,30 +513,19 @@ fn App() -> impl IntoView {
         }
     });
 
-    // Get viewport from registry for the menu (available after NodeEditor mounts)
-    let viewport_signal: RwSignal<ViewportTransform> = RwSignal::new(ViewportTransform::default());
-    // We'll sync this from the registry via an effect inside the editor
-
     view! {
         <style>"html, body { margin: 0; padding: 0; background: #18181b; color-scheme: dark; }"</style>
-        <div
-            style="width: 100vw; height: 100vh; overflow: hidden; \
-                   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; \
-                   font-size: 13px; color: #d4d4d8; box-sizing: border-box;"
-            on:dblclick=move |ev: web_sys::MouseEvent| {
-                // Open node menu on double-click on empty canvas
-                let vp = viewport_signal.get_untracked();
-                let canvas_pos = vp.screen_to_canvas(Position::new(ev.client_x() as f64, ev.client_y() as f64));
-                menu_open_at.set(Some(canvas_pos));
-            }
-        >
+        <div style="width: 100vw; height: 100vh; overflow: hidden; \
+                     font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; \
+                     font-size: 13px; color: #d4d4d8; box-sizing: border-box;">
             <NodeEditor
                 config={EditorConfig::default()}
                 connections=connections_signal
                 on_event=on_event
                 _marker={PhantomData::<DemoPort>}
+                menu_items=menu_items
+                menu_search=menu_search
             >
-                <ViewportSync target=viewport_signal />
                 <GroupBoxOverlay<String, String, String, DemoPort>
                     groups=groups_signal
                     on_event=on_group_event
@@ -561,26 +538,8 @@ fn App() -> impl IntoView {
                     <DynNodeView node=node />
                 </For>
             </NodeEditor>
-            <NodeMenu
-                items=menu_items
-                search_text=menu_search
-                on_event=on_menu_event
-                open_at=menu_open_at
-                viewport=Signal::derive(move || viewport_signal.get())
-                draft_context=Signal::derive(move || draft_ctx.get())
-            />
         </div>
     }
-}
-
-/// Syncs the EditorRegistry viewport into a consumer-owned signal.
-#[component]
-fn ViewportSync(target: RwSignal<ViewportTransform>) -> impl IntoView {
-    let reg = expect_context::<EditorRegistry<String, String, String, DemoPort>>();
-    Effect::new(move || {
-        let vp = reg.viewport.get();
-        target.set(vp);
-    });
 }
 
 /// Renders the appropriate node component based on node_type.
