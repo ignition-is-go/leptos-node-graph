@@ -53,40 +53,76 @@ where
         conns
             .values()
             .filter_map(|conn| {
-                let source_pos = ports.get(&conn.source).map(|p| p.position)?;
-                let target_pos = ports.get(&conn.target).map(|p| p.position)?;
-                let path_d = utils::bezier_path(source_pos, target_pos);
+                let source = ports.get(&conn.source).map(|p| p.position);
+                let target = ports.get(&conn.target).map(|p| p.position);
                 let is_selected = selected.contains(&conn.id);
                 let conn_id = conn.id.clone();
 
                 let stroke = if is_selected { &sc.stroke_selected } else { &sc.stroke };
                 let width = if is_selected { sc.stroke_width_selected } else { sc.stroke_width };
-                let style = format!(
-                    "pointer-events: stroke; cursor: pointer; stroke: {}; stroke-width: {};",
-                    stroke, width
-                );
 
-                let reg_click = reg.clone();
-                Some(view! {
-                    <path
-                        d=path_d
-                        fill="none"
-                        style=style
-                        data-connection=""
-                        on:mousedown=move |ev: web_sys::MouseEvent| {
-                            ev.stop_propagation();
-                            if ev.shift_key() {
-                                reg_click.selected_connections.update(|sel| {
-                                    if !sel.remove(&conn_id) {
-                                        sel.insert(conn_id.clone());
+                match (source, target) {
+                    // Both ports present — normal connection
+                    (Some(src), Some(tgt)) => {
+                        let path_d = utils::bezier_path(src, tgt);
+                        let style = format!(
+                            "pointer-events: stroke; cursor: pointer; stroke: {}; stroke-width: {};",
+                            stroke, width
+                        );
+                        let reg_click = reg.clone();
+                        Some(view! {
+                            <path
+                                d=path_d
+                                fill="none"
+                                style=style
+                                data-connection=""
+                                on:mousedown=move |ev: web_sys::MouseEvent| {
+                                    ev.stop_propagation();
+                                    if ev.shift_key() {
+                                        reg_click.selected_connections.update(|sel| {
+                                            if !sel.remove(&conn_id) {
+                                                sel.insert(conn_id.clone());
+                                            }
+                                        });
+                                    } else {
+                                        reg_click.select_connection(conn_id.clone());
                                     }
-                                });
-                            } else {
-                                reg_click.select_connection(conn_id.clone());
-                            }
-                        }
-                    />
-                })
+                                }
+                            />
+                        }.into_any())
+                    }
+                    // One port missing — dangling stub with "?" indicator
+                    (Some(pos), None) | (None, Some(pos)) => {
+                        let is_source_present = source.is_some();
+                        let stub_len = 30.0;
+                        let end_x = if is_source_present { pos.x + stub_len } else { pos.x - stub_len };
+                        let end = Position::new(end_x, pos.y);
+                        let (start, finish) = if is_source_present { (pos, end) } else { (end, pos) };
+                        let path_d = utils::bezier_path(start, finish);
+                        let style = format!(
+                            "pointer-events: none; stroke: {}; stroke-width: {}; stroke-dasharray: 4 3; opacity: 0.5;",
+                            stroke, width
+                        );
+                        let q_x = end_x + if is_source_present { 6.0 } else { -6.0 };
+                        let text_anchor = if is_source_present { "start" } else { "end" };
+                        Some(view! {
+                            <path d=path_d fill="none" style=style data-connection-dangling="" />
+                            <text
+                                x=q_x
+                                y=pos.y + 4.0
+                                style=format!(
+                                    "font-size: 10px; fill: {}; opacity: 0.5; font-weight: 600; \
+                                     pointer-events: none; text-anchor: {};",
+                                    stroke, text_anchor
+                                )
+                            >
+                                "?"
+                            </text>
+                        }.into_any())
+                    }
+                    // Both missing — skip
+                    (None, None) => None,
+                }
             })
             .collect_view()
     };

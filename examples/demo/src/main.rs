@@ -488,6 +488,16 @@ fn node_catalog() -> Vec<NodeMenuItem> {
                 MenuPort { id: "value".into(), label: "Value".into(), direction: PortDirection::Input },
             ],
         },
+        NodeMenuItem {
+            id: "custom".into(),
+            label: "Custom".into(),
+            category: Some("Utility".into()),
+            description: Some("Configurable inputs/outputs".into()),
+            ports: vec![
+                MenuPort { id: "in_0".into(), label: "In 0".into(), direction: PortDirection::Input },
+                MenuPort { id: "out_0".into(), label: "Out 0".into(), direction: PortDirection::Output },
+            ],
+        },
     ]
 }
 
@@ -673,6 +683,7 @@ fn DynNodeView(node: DynNode) -> impl IntoView {
         "mix" => view! { <MixNode id=id position=position /> }.into_any(),
         "math" => view! { <MathNode id=id position=position /> }.into_any(),
         "output" => view! { <OutputNode id=id position=position /> }.into_any(),
+        "custom" => view! { <CustomNode id=id position=position /> }.into_any(),
         _ => view! { <div>"Unknown node type"</div> }.into_any(),
     }
 }
@@ -779,6 +790,84 @@ fn OutputNode(id: String, position: RwSignal<Position>) -> impl IntoView {
                     <In id=value_id.clone() port_type=DemoPort::Any label="Value" />
                 }.into_any())
             />
+        </StyledNode>
+    }
+}
+
+#[component]
+fn CustomNode(id: String, position: RwSignal<Position>) -> impl IntoView {
+    let (num_inputs, set_num_inputs) = signal(2usize);
+    let (num_outputs, set_num_outputs) = signal(1usize);
+    let id_in = id.clone();
+    let id_out = id.clone();
+
+    view! {
+        <StyledNode id=id position=position>
+            <NodeHeader title="Custom" />
+            <NodeContent>
+                <NodeField label="Inputs">
+                    <select
+                        style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
+                               border-radius: 4px; color: #d4d4d8; font-size: 11px; \
+                               padding: 3px 6px; outline: none; cursor: pointer;"
+                        on:change=move |ev| {
+                            use leptos::wasm_bindgen::JsCast;
+                            let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>();
+                            if let Ok(n) = t.value().parse::<usize>() {
+                                set_num_inputs.set(n);
+                            }
+                        }
+                    >
+                        {(0..=8).map(|n| {
+                            view! { <option value=n.to_string() selected={n == 2}>{n.to_string()}</option> }
+                        }).collect_view()}
+                    </select>
+                </NodeField>
+                <NodeField label="Outputs">
+                    <select
+                        style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
+                               border-radius: 4px; color: #d4d4d8; font-size: 11px; \
+                               padding: 3px 6px; outline: none; cursor: pointer;"
+                        on:change=move |ev| {
+                            use leptos::wasm_bindgen::JsCast;
+                            let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>();
+                            if let Ok(n) = t.value().parse::<usize>() {
+                                set_num_outputs.set(n);
+                            }
+                        }
+                    >
+                        {(0..=8).map(|n| {
+                            view! { <option value=n.to_string() selected={n == 1}>{n.to_string()}</option> }
+                        }).collect_view()}
+                    </select>
+                </NodeField>
+            </NodeContent>
+            <div style="display: flex; justify-content: space-between; gap: 24px; padding: 8px 0;">
+                <div style="display: flex; flex-direction: column; gap: 2px;">
+                    {move || {
+                        let n = num_inputs.get();
+                        let id = id_in.clone();
+                        (0..n).map(|i| {
+                            let port_id = format!("{}_in_{}", id, i);
+                            view! {
+                                <In id=port_id port_type=DemoPort::Any label=format!("In {i}") />
+                            }
+                        }).collect_view()
+                    }}
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 2px; align-items: flex-end;">
+                    {move || {
+                        let n = num_outputs.get();
+                        let id = id_out.clone();
+                        (0..n).map(|i| {
+                            let port_id = format!("{}_out_{}", id, i);
+                            view! {
+                                <Out id=port_id port_type=DemoPort::Any label=format!("Out {i}") />
+                            }
+                        }).collect_view()
+                    }}
+                </div>
+            </div>
         </StyledNode>
     }
 }

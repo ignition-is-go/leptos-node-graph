@@ -18,7 +18,37 @@ pub struct AnchorContext {
     pub is_incompatible: Signal<bool>,
     pub is_source: Signal<bool>,
     pub is_connected: Signal<bool>,
+    pub has_broken_connections: Signal<bool>,
     pub dot_ref: NodeRef<leptos::html::Div>,
+}
+
+/// Items for the anchor context menu.
+#[derive(Clone, Debug)]
+pub struct AnchorMenuItem {
+    pub label: String,
+    pub action: AnchorMenuAction,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum AnchorMenuAction {
+    /// Remove all connections on this port.
+    RemoveConnections,
+    /// Remove only broken connections (where the other port is missing).
+    RemoveBrokenConnections,
+}
+
+/// State for the anchor context menu, provided to consumer for rendering.
+#[derive(Clone)]
+pub struct AnchorMenuState {
+    /// Screen position to render the menu at.
+    pub position: RwSignal<Option<Position>>,
+    /// Menu items with current enabled state.
+    pub items: Signal<Vec<AnchorMenuItem>>,
+    /// Call this to execute an action and close the menu.
+    pub on_action: Callback<AnchorMenuAction>,
+    /// Call this to close the menu without action.
+    pub on_close: Callback<()>,
 }
 
 /// Try to complete a draft connection on the given port.
@@ -116,62 +146,67 @@ where
     });
 
     // Update port position when node position changes.
-    // First frame: DOM measurement to compute offset, stored in registry.
-    // Subsequent frames: batch_set_positions uses the stored offset (no Effect needed).
+    // Uses cached offset when available; re-measures from DOM when invalidated.
     let reg_pos = registry.clone();
     let id_pos = id.clone();
-    let measured = std::cell::Cell::new(false);
     Effect::new(move || {
         let node_pos = node_ctx.position.get();
 
-        if measured.get() {
-            // After first measurement, batch_set_positions handles port updates.
-            // This Effect only needs to run for non-drag position changes
-            // (e.g. consumer setting position signal directly).
+        // Check if we have a cached offset
+        let offset = reg_pos.ports.with_untracked(|ports| {
+            ports.get(&id_pos).and_then(|p| p.offset)
+        });
+
+        if let Some(offset) = offset {
+            // Use cached offset (fast path — no DOM query)
             let is_dragging = reg_pos.drag_state.with_untracked(|ds| ds.is_some());
             if is_dragging {
                 return; // batch_set_positions already handled this
             }
-            // Non-drag position change: use stored offset
-            let offset = reg_pos.ports.with_untracked(|ports| {
-                ports.get(&id_pos).and_then(|p| p.offset)
-            });
-            if let Some(offset) = offset {
-                let canvas_pos = Position::new(node_pos.x + offset.x, node_pos.y + offset.y);
-                reg_pos.set_port_position(&id_pos, canvas_pos);
-            }
+            let canvas_pos = Position::new(node_pos.x + offset.x, node_pos.y + offset.y);
+            reg_pos.set_port_position(&id_pos, canvas_pos);
             return;
         }
 
-        // First measurement: get offset from DOM
-        if let Some(dot_el) = dot_ref.get() {
-            let container_rect = dot_el
-                .closest(".node-editor")
-                .ok()
-                .flatten()
-                .map(|c| c.get_bounding_client_rect());
+        // No cached offset — measure from DOM (first render or after invalidation)
+        // Use RAF to ensure DOM has settled after port add/remove
+        let reg = reg_pos.clone();
+        let id = id_pos.clone();
+        let nid = node_ctx.id.clone();
+        crate::raf::request_animation_frame(move || {
+            let node_pos = reg.nodes.with_untracked(|nodes| {
+                nodes.get(&nid).map(|n| {
+                    n.position_signal.map(|s| s.get_untracked()).unwrap_or(n.position)
+                }).unwrap_or_default()
+            });
 
-            if let Some(container_rect) = container_rect {
-                let port_rect = dot_el.get_bounding_client_rect();
-                let viewport = reg_pos.viewport.get_untracked();
+            if let Some(dot_el) = dot_ref.get_untracked() {
+                let container_rect = dot_el
+                    .closest(".node-editor")
+                    .ok()
+                    .flatten()
+                    .map(|c| c.get_bounding_client_rect());
 
-                let screen_x =
-                    port_rect.left() + port_rect.width() / 2.0 - container_rect.left();
-                let screen_y =
-                    port_rect.top() + port_rect.height() / 2.0 - container_rect.top();
+                if let Some(container_rect) = container_rect {
+                    let port_rect = dot_el.get_bounding_client_rect();
+                    let viewport = reg.viewport.get_untracked();
 
-                let canvas_pos = viewport.screen_to_canvas(Position::new(screen_x, screen_y));
-                reg_pos.set_port_position(&id_pos, canvas_pos);
+                    let screen_x =
+                        port_rect.left() + port_rect.width() / 2.0 - container_rect.left();
+                    let screen_y =
+                        port_rect.top() + port_rect.height() / 2.0 - container_rect.top();
 
-                // Store offset in registry for batch_set_positions to use
-                let offset = Position::new(
-                    canvas_pos.x - node_pos.x,
-                    canvas_pos.y - node_pos.y,
-                );
-                reg_pos.set_port_offset(&id_pos, offset);
-                measured.set(true);
+                    let canvas_pos = viewport.screen_to_canvas(Position::new(screen_x, screen_y));
+                    reg.set_port_position(&id, canvas_pos);
+
+                    let offset = Position::new(
+                        canvas_pos.x - node_pos.x,
+                        canvas_pos.y - node_pos.y,
+                    );
+                    reg.set_port_offset(&id, offset);
+                }
             }
-        }
+        });
     });
 
     // Mousedown: start a draft from any port, or click-complete an existing draft
@@ -311,13 +346,123 @@ where
         })
     });
 
-    // Provide context — dot_ref is attached by the consumer's dot element
+    // Broken connections: one side registered, other side missing
+    let id_broken = id.clone();
+    let reg_broken = registry.clone();
+    let has_broken_connections = Signal::derive(move || {
+        reg_broken.connections.with(|conns| {
+            reg_broken.ports.with_untracked(|ports| {
+                conns.values().any(|c| {
+                    let involves_me = c.source == id_broken || c.target == id_broken;
+                    if !involves_me { return false; }
+                    let source_ok = ports.contains_key(&c.source);
+                    let target_ok = ports.contains_key(&c.target);
+                    source_ok != target_ok // exactly one side missing
+                })
+            })
+        })
+    });
+
+    // Context menu state
+    let ctx_menu_pos: RwSignal<Option<Position>> = RwSignal::new(None);
+
+    let id_menu = id.clone();
+    let reg_menu = registry.clone();
+    let menu_items = Signal::derive(move || {
+        let has_conns = reg_menu.connections.with(|conns| {
+            conns.values().any(|c| c.source == id_menu || c.target == id_menu)
+        });
+        let has_broken = reg_menu.connections.with(|conns| {
+            reg_menu.ports.with_untracked(|ports| {
+                conns.values().any(|c| {
+                    let involves_me = c.source == id_menu || c.target == id_menu;
+                    if !involves_me { return false; }
+                    !ports.contains_key(&c.source) || !ports.contains_key(&c.target)
+                })
+            })
+        });
+        vec![
+            AnchorMenuItem {
+                label: "Remove connections".into(),
+                action: AnchorMenuAction::RemoveConnections,
+                enabled: has_conns,
+            },
+            AnchorMenuItem {
+                label: "Remove broken connections".into(),
+                action: AnchorMenuAction::RemoveBrokenConnections,
+                enabled: has_broken,
+            },
+        ]
+    });
+
+    let id_action = id.clone();
+    let reg_action = registry.clone();
+    let on_action = Callback::new(move |action: AnchorMenuAction| {
+        ctx_menu_pos.set(None);
+        match action {
+            AnchorMenuAction::RemoveConnections => {
+                let to_remove: Vec<_> = reg_action.connections.with_untracked(|conns| {
+                    conns.values()
+                        .filter(|c| c.source == id_action || c.target == id_action)
+                        .map(|c| c.id.clone())
+                        .collect()
+                });
+                for conn_id in to_remove {
+                    reg_action.emit(GraphEvent::ConnectionRemoved { id: conn_id });
+                }
+            }
+            AnchorMenuAction::RemoveBrokenConnections => {
+                let to_remove: Vec<_> = reg_action.connections.with_untracked(|conns| {
+                    reg_action.ports.with_untracked(|ports| {
+                        conns.values()
+                            .filter(|c| {
+                                let involves = c.source == id_action || c.target == id_action;
+                                let broken = !ports.contains_key(&c.source) || !ports.contains_key(&c.target);
+                                involves && broken
+                            })
+                            .map(|c| c.id.clone())
+                            .collect()
+                    })
+                });
+                for conn_id in to_remove {
+                    reg_action.emit(GraphEvent::ConnectionRemoved { id: conn_id });
+                }
+            }
+        }
+    });
+
+    let on_close = Callback::new(move |_: ()| {
+        ctx_menu_pos.set(None);
+    });
+
+    let menu_state = AnchorMenuState {
+        position: ctx_menu_pos,
+        items: menu_items,
+        on_action: on_action.clone(),
+        on_close,
+    };
+    provide_context(menu_state);
+
+    // Right-click handler
+    let _ = use_event_listener(anchor_ref, leptos::ev::contextmenu, move |ev: web_sys::MouseEvent| {
+        ev.prevent_default();
+        ev.stop_propagation();
+        ctx_menu_pos.set(Some(Position::new(ev.client_x() as f64, ev.client_y() as f64)));
+    });
+
+    // Close context menu on any click elsewhere
+    let _ = use_event_listener(leptos::prelude::document(), leptos::ev::pointerdown, move |_ev: web_sys::PointerEvent| {
+        ctx_menu_pos.set(None);
+    });
+
+    // Provide anchor context
     let anchor_ctx = AnchorContext {
         direction,
         is_compatible,
         is_incompatible,
         is_source,
         is_connected,
+        has_broken_connections,
         dot_ref,
     };
     provide_context(anchor_ctx);
@@ -330,6 +475,49 @@ where
         ().into_any()
     };
 
+    // Built-in context menu rendering
+    let ms = use_context::<crate::theme::NodeMenuStyle>().unwrap_or_default();
+    let ctx_menu_view = move || {
+        let pos = ctx_menu_pos.get()?;
+        let items = menu_items.get();
+        let on_act = on_action.clone();
+
+        let style = format!(
+            "position: fixed; left: {}px; top: {}px; z-index: 10001; \
+             background: {}; border: {}; border-radius: 6px; \
+             box-shadow: {}; min-width: 180px; padding: 4px 0; overflow: hidden;",
+            pos.x, pos.y, ms.background, ms.border, ms.shadow
+        );
+
+        Some(view! {
+            <div style=style data-anchor-menu="">
+                {items.into_iter().map(|item| {
+                    let action = item.action.clone();
+                    let on_act = on_act.clone();
+                    let enabled = item.enabled;
+                    let item_style = if enabled {
+                        format!("padding: 6px 12px; cursor: pointer; font-size: 12px; color: {};", ms.item_color)
+                    } else {
+                        format!("padding: 6px 12px; font-size: 12px; color: {}; opacity: 0.35; pointer-events: none;", ms.item_color)
+                    };
+                    view! {
+                        <div
+                            style=item_style
+                            on:pointerup=move |ev: web_sys::PointerEvent| {
+                                ev.stop_propagation();
+                                if enabled {
+                                    on_act.run(action.clone());
+                                }
+                            }
+                        >
+                            {item.label}
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+        })
+    };
+
     view! {
         <div
             node_ref=anchor_ref
@@ -337,6 +525,7 @@ where
         >
             {slot_content}
         </div>
+        {ctx_menu_view}
     }
 }
 

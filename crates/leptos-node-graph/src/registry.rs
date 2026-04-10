@@ -161,7 +161,8 @@ where
         });
     }
 
-    /// Register a port.
+    /// Register a port. Invalidates cached offsets for all sibling ports on the same node
+    /// since the new port may shift their visual positions.
     pub fn register_port(
         &self,
         id: P,
@@ -171,10 +172,15 @@ where
         position: Position,
     ) {
         self.ports.update(|ports| {
-            // Count existing ports on this node with the same direction to get the slot index
-            let slot_index = ports.values()
-                .filter(|p| p.node_id == node_id && p.direction == direction)
-                .count();
+            // Recalculate slot indices for all ports on this node+direction
+            let mut idx = 0;
+            for entry in ports.values_mut() {
+                if entry.node_id == node_id && entry.direction == direction {
+                    entry.slot_index = idx;
+                    entry.offset = None; // invalidate cached offset
+                    idx += 1;
+                }
+            }
             ports.insert(
                 id.clone(),
                 PortEntry {
@@ -183,37 +189,37 @@ where
                     direction,
                     port_type,
                     position,
-                    slot_index,
+                    slot_index: idx,
                     offset: None,
                 },
             );
         });
     }
 
-    /// Deregister a port and remove any connections that reference it,
-    /// emitting `ConnectionRemoved` events for each.
+    /// Deregister a port. Connections referencing this port are kept in the
+    /// consumer's data but not rendered (the connection renderer skips connections
+    /// with missing ports). This allows connections to restore if the port reappears.
     pub fn deregister_port(&self, id: &P) {
-        // Find connections referencing this port.
-        let to_remove: Vec<(C, C)> = self.connections.with_untracked(|conns| {
-            conns
-                .values()
-                .filter(|c| &c.source == id || &c.target == id)
-                .map(|c| (c.id.clone(), c.id.clone()))
-                .collect()
-        });
 
-        for (conn_id, event_id) in to_remove {
-            self.connections.update(|conns| {
-                conns.remove(&conn_id);
-            });
-            self.selected_connections.update(|sel| {
-                sel.remove(&conn_id);
-            });
-            self.emit(GraphEvent::ConnectionRemoved { id: event_id });
-        }
+        // Get the node_id and direction before removing
+        let port_info = self.ports.with_untracked(|ports| {
+            ports.get(id).map(|p| (p.node_id.clone(), p.direction))
+        });
 
         self.ports.update(|ports| {
             ports.remove(id);
+
+            // Reindex and invalidate remaining sibling ports
+            if let Some((node_id, direction)) = &port_info {
+                let mut idx = 0;
+                for entry in ports.values_mut() {
+                    if &entry.node_id == node_id && entry.direction == *direction {
+                        entry.slot_index = idx;
+                        entry.offset = None;
+                        idx += 1;
+                    }
+                }
+            }
         });
     }
 

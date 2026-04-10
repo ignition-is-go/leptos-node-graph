@@ -17,7 +17,7 @@ pub mod utils;
 pub use types::*;
 pub use editor::NodeEditor;
 pub use node::{Node, NodeContext};
-pub use anchor::{InputAnchor, OutputAnchor, AnchorContext};
+pub use anchor::{InputAnchor, OutputAnchor, AnchorContext, AnchorMenuState, AnchorMenuAction, AnchorMenuItem};
 pub use connection::ConnectionStyle;
 pub use selection::SelectionBoxStyle;
 pub use group::{GroupBoxOverlay, GroupBox, GroupBounds, GroupEvent};
