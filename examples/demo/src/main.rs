@@ -142,7 +142,7 @@ fn AnchorRow(children: Children) -> impl IntoView {
 
         format!(
             "display: flex; align-items: center; gap: 6px; padding: 4px 10px; \
-             cursor: crosshair; transition: opacity 0.15s; opacity: {opacity}; \
+             cursor: default; transition: opacity 0.15s; opacity: {opacity}; \
              {pointer} {direction}"
         )
     };
@@ -178,11 +178,11 @@ fn AnchorDot() -> impl IntoView {
         format!(
             "width: 8px; height: 8px; border-radius: 50%; \
              border: 1.5px solid {border_color}; background: {bg}; \
-             flex-shrink: 0; transition: all 0.15s; {shadow}"
+             flex-shrink: 0; transition: all 0.15s; cursor: crosshair; {shadow}"
         )
     };
 
-    view! { <div style=style node_ref=ctx.dot_ref /> }
+    view! { <div style=style node_ref=ctx.dot_ref data-anchor-dot="" /> }
 }
 
 /// Anchor label. Highlights when compatible.
@@ -408,7 +408,10 @@ fn App() -> impl IntoView {
 
     let on_event = {
         let connections = connections;
-        Callback::new(move |event: GraphEvent<String, String, String>| match event {
+        Callback::new(move |event: GraphEvent<String, String, String>| {
+
+        console::log_1(&format!("Graph event: {:?}", event).into());
+        match event {
             GraphEvent::ConnectionRequested { source, target } => {
                 let already =
                     connections.with_untracked(|c| c.values().any(|e| e.target == target));
@@ -449,8 +452,8 @@ fn App() -> impl IntoView {
                 }
             }
             other => {
-                console::log_1(&format!("Graph event: {:?}", other).into());
-            }
+                console::log_1(&format!("Unandled! Graph event: {:?}", other).into());
+            }}
         })
     };
 
@@ -486,6 +489,7 @@ fn App() -> impl IntoView {
     let groups_signal = Signal::derive(move || groups.get());
 
     let on_group_event = Callback::new(move |event: GroupEvent<String>| {
+
         match event {
             GroupEvent::Renamed { group_id, new_label } => {
                 groups.update(|gs| {

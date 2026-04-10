@@ -148,16 +148,56 @@ where
     let id_md = id.clone();
     let pt = port_type.clone();
     let _ = use_event_listener(anchor_ref, leptos::ev::mousedown, move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        ev.prevent_default();
-
         let has_draft = reg_md.draft_connection.with_untracked(|d| d.is_some());
 
         if has_draft {
-            // Try to complete the connection via click
+            // Complete an existing draft — clicking anywhere on the anchor row is fine
+            ev.stop_propagation();
+            ev.prevent_default();
             try_complete_connection(&reg_md, &id_md, direction);
         } else {
-            // Start a new draft from this port
+            // Start a new draft — only from the dot element
+            let on_dot = if let Some(target) = ev.target() {
+                use leptos::wasm_bindgen::JsCast;
+                target.dyn_ref::<web_sys::Element>()
+                    .map_or(false, |el| el.closest("[data-anchor-dot]").ok().flatten().is_some())
+            } else {
+                false
+            };
+
+            if !on_dot { return; }
+
+            ev.stop_propagation();
+            ev.prevent_default();
+
+            // If this is a connected input, disconnect and re-route from the original output
+            if direction == PortDirection::Input {
+                let existing = reg_md.connections.with_untracked(|conns| {
+                    conns.iter()
+                        .find(|(_, c)| c.target == id_md)
+                        .map(|(conn_id, c)| (conn_id.clone(), c.source.clone()))
+                });
+
+                if let Some((conn_id, source_port_id)) = existing {
+                    // Remove the connection
+                    reg_md.emit(GraphEvent::ConnectionRemoved { id: conn_id });
+
+                    // Start draft from the original output
+                    if let Some(source_entry) = reg_md.get_port(&source_port_id) {
+                        let source_pos = reg_md.port_position(&source_port_id).unwrap_or_default();
+                        reg_md.draft_connection.set(Some(DraftConnection {
+                            source_port: source_port_id,
+                            source_position: source_pos,
+                            port_type: source_entry.port_type.clone(),
+                            current_end: source_pos,
+                            origin_direction: PortDirection::Output,
+                        }));
+                    }
+                    return;
+                }
+            }
+
+            // Normal: start a new draft from this port
             let port_pos = reg_md.port_position(&id_md);
             if let Some(pos) = port_pos {
                 reg_md.draft_connection.set(Some(DraftConnection {

@@ -103,11 +103,11 @@ where
             return;
         }
 
-        // Skip if click was on an anchor or interactive form element
+        // Skip if click was on an anchor dot or interactive form element
         if let Some(target) = ev.target() {
             use leptos::wasm_bindgen::JsCast;
             if let Some(el) = target.dyn_ref::<web_sys::Element>() {
-                if el.closest("[data-anchor]").ok().flatten().is_some() {
+                if el.closest("[data-anchor-dot]").ok().flatten().is_some() {
                     return;
                 }
                 let tag = el.tag_name().to_uppercase();

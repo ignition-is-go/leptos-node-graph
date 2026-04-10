@@ -65,10 +65,10 @@ pub fn NodeMenu(
     search_text: RwSignal<String>,
     /// Callback when item is selected or menu is cancelled.
     on_event: Callback<NodeMenuEvent>,
-    /// Canvas position to open the menu at. None = closed.
+    /// Position to open the menu at (canvas coordinates). None = closed.
     open_at: RwSignal<Option<Position>>,
-    /// Current viewport transform.
-    viewport: Signal<ViewportTransform>,
+    /// Screen position for rendering the menu (fixed coordinates).
+    screen_pos: Signal<Option<Position>>,
     /// If set, menu was opened during a draft connection.
     #[prop(optional, into)]
     draft_context: Signal<Option<DraftContext>>,
@@ -78,12 +78,14 @@ pub fn NodeMenu(
 
     let input_ref = NodeRef::<leptos::html::Input>::new();
     let (selected_index, set_selected_index) = signal(0usize);
+    let (hovered_port, set_hovered_port) = signal(Option::<(usize, String)>::None);
 
     // Focus input when menu opens
     Effect::new(move || {
         if open_at.get().is_some() {
             search_text.set(String::new());
             set_selected_index.set(0);
+            set_hovered_port.set(None);
             request_animation_frame(move || {
                 if let Some(el) = input_ref.get_untracked() {
                     let _ = el.focus();
@@ -183,19 +185,18 @@ pub fn NodeMenu(
     });
 
     move || {
-        let pos = open_at.get()?;
-
-        let vp = viewport.get();
-        let screen_pos = vp.canvas_to_screen(pos);
+        let _canvas_pos = open_at.get()?;
+        let sp = screen_pos.get()?;
 
         let menu_style = format!(
-            "position: absolute; left: {}px; top: {}px; z-index: 10000;",
-            screen_pos.x, screen_pos.y,
+            "position: fixed; left: {}px; top: {}px; z-index: 10000;",
+            sp.x, sp.y,
         );
 
         let current_items = items.get();
         let selected = selected_index.get();
         let dc = draft_context.get();
+        let hp = hovered_port.get();
 
         Some(view! {
             <div style=menu_style data-node-menu="">
@@ -256,7 +257,16 @@ pub fn NodeMenu(
                                         None
                                     };
 
-                                    let item_bg = if is_selected {
+                                    let has_visible_ports = dc_inner.is_some() && item.ports.iter().filter(|p| {
+                                        dc_inner.as_ref().map_or(false, |dc| {
+                                            let target = match dc.origin_direction {
+                                                PortDirection::Output => PortDirection::Input,
+                                                PortDirection::Input => PortDirection::Output,
+                                            };
+                                            p.direction == target
+                                        })
+                                    }).count() > 1;
+                                    let item_bg = if is_selected && !has_visible_ports {
                                         "background: rgba(99, 102, 241, 0.15);"
                                     } else {
                                         ""
@@ -302,6 +312,7 @@ pub fn NodeMenu(
 
                                     // Port sub-items (always visible inline in draft mode)
                                     let port_views = if compatible_ports.len() > 1 {
+                                        let hp = hp.clone();
                                         let ports_html: Vec<_> = compatible_ports.into_iter().map(|port| {
                                             let emit_port = emit.clone();
                                             let iid = item_id.clone();
@@ -312,14 +323,31 @@ pub fn NodeMenu(
                                             };
                                             let pid_click = pid.clone();
                                             let iid_click = iid.clone();
+                                            let pid_hover = pid.clone();
+                                            let hover_key = (i, pid.clone());
+                                            let is_port_hovered = hp.as_ref() == Some(&hover_key);
+                                            let port_bg = if is_port_hovered {
+                                                "background: rgba(99, 102, 241, 0.15);"
+                                            } else {
+                                                ""
+                                            };
+                                            let port_style = format!(
+                                                "padding: 3px 4px 3px 20px; cursor: pointer; \
+                                                 font-size: 11px; color: #a1a1aa; {port_bg}"
+                                            );
                                             view! {
                                                 <div
-                                                    style="padding: 3px 4px 3px 20px; cursor: pointer; \
-                                                           font-size: 11px; color: #a1a1aa;"
-                                                    on:click=move |ev: web_sys::MouseEvent| {
+                                                    style=port_style
+                                                    on:pointerup=move |ev: web_sys::PointerEvent| {
                                                         ev.stop_propagation();
                                                         ev.prevent_default();
                                                         emit_port(iid_click.clone(), Some(pid_click.clone()));
+                                                    }
+                                                    on:mouseenter=move |_| {
+                                                        set_hovered_port.set(Some((i, pid_hover.clone())));
+                                                    }
+                                                    on:mouseleave=move |_| {
+                                                        set_hovered_port.set(None);
                                                     }
                                                 >
                                                     {dir_icon}{port.label}
@@ -335,9 +363,8 @@ pub fn NodeMenu(
                                         {cat_header}
                                         <div
                                             style=item_style
-                                            on:click=move |ev: web_sys::MouseEvent| {
+                                            on:pointerup=move |ev: web_sys::PointerEvent| {
                                                 ev.stop_propagation();
-                                                // Don't fire if we have multiple ports (user should pick one)
                                                 if has_multi_ports { return; }
                                                 emit_item(item_id_click.clone(), auto_port_click.clone());
                                             }

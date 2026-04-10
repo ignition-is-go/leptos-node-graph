@@ -40,6 +40,9 @@ where
 
     // Menu state — owned by the editor
     let menu_open_at: RwSignal<Option<Position>> = RwSignal::new(None);
+    let menu_screen_pos: RwSignal<Option<Position>> = RwSignal::new(None);
+    // Track last mouse position for Tab-to-open
+    let last_mouse: RwSignal<Position> = RwSignal::new(Position::new(400.0, 300.0));
     let menu_search_signal = menu_search.unwrap_or_else(|| RwSignal::new(String::new()));
     let has_menu = menu_items.is_some();
 
@@ -67,6 +70,7 @@ where
     let reg_mm = registry.clone();
     let ref_mm = container_ref;
     let _mousemove_cleanup = use_event_listener(leptos::prelude::document(), leptos::ev::mousemove, move |ev: web_sys::MouseEvent| {
+        last_mouse.set(Position::new(ev.client_x() as f64, ev.client_y() as f64));
         interaction::handle_canvas_mousemove(&reg_mm, ev, &ref_mm);
     });
 
@@ -88,16 +92,17 @@ where
         // Tab opens the menu
         if ev.key() == "Tab" && has_menu {
             ev.prevent_default();
+            let mouse = last_mouse.get_untracked();
+            let (ox, oy) = ref_kd.with_untracked(|el| {
+                el.as_ref().map(|e| {
+                    let r = e.get_bounding_client_rect();
+                    (r.left(), r.top())
+                }).unwrap_or((0.0, 0.0))
+            });
             let vp = reg_kd.viewport.get_untracked();
-            let center = vp.screen_to_canvas(Position::new(
-                ref_kd.with_untracked(|el| {
-                    el.as_ref().map(|e| e.client_width() as f64 / 2.0).unwrap_or(400.0)
-                }),
-                ref_kd.with_untracked(|el| {
-                    el.as_ref().map(|e| e.client_height() as f64 / 2.0).unwrap_or(300.0)
-                }),
-            ));
-            menu_open_at.set(Some(center));
+            let canvas_pos = vp.screen_to_canvas(Position::new(mouse.x - ox, mouse.y - oy));
+            menu_open_at.set(Some(canvas_pos));
+            menu_screen_pos.set(Some(mouse));
             return;
         }
         interaction::handle_keydown(&reg_kd, ev, &ref_kd);
@@ -128,6 +133,7 @@ where
             ev.client_y() as f64 - oy,
         ));
         menu_open_at.set(Some(canvas_pos));
+        menu_screen_pos.set(Some(Position::new(ev.client_x() as f64, ev.client_y() as f64)));
     };
 
     // Menu event handler — emits GraphEvent::CreateNode and clears draft
@@ -157,7 +163,7 @@ where
                 });
             }
             NodeMenuEvent::Cancelled => {
-                // Don't clear draft on cancel — user might want to keep dragging
+                reg_menu.draft_connection.set(None);
             }
         }
     });
@@ -181,13 +187,10 @@ where
         )
     };
 
-    let viewport_for_menu = {
-        let reg = registry.clone();
-        Signal::derive(move || reg.viewport.get())
-    };
-
     // Menu items (use empty vec if not provided)
     let menu_items_signal = menu_items.unwrap_or_else(|| Signal::derive(|| vec![]));
+
+    let menu_screen_pos_signal = Signal::derive(move || menu_screen_pos.get());
 
     view! {
         <div
@@ -205,14 +208,14 @@ where
                 {children()}
             </div>
             <SelectionBox<N, P, C, T> />
-            <NodeMenu
-                items=menu_items_signal
-                search_text=menu_search_signal
-                on_event=on_menu_event
-                open_at=menu_open_at
-                viewport=viewport_for_menu
-                draft_context=draft_context
-            />
         </div>
+        <NodeMenu
+            items=menu_items_signal
+            search_text=menu_search_signal
+            on_event=on_menu_event
+            open_at=menu_open_at
+            screen_pos=menu_screen_pos_signal
+            draft_context=draft_context
+        />
     }
 }
