@@ -134,7 +134,9 @@ where
                         let current_groups = groups.get_untracked();
                         let nodes_map = reg_drag.nodes.get_untracked();
                         for group in &current_groups {
-                            if let Some(bounds) = compute_bounds(&group.node_ids, &nodes_map, padding) {
+                            if let Some(bounds) =
+                                compute_bounds(&group.node_ids, &nodes_map, padding)
+                            {
                                 if bounds.contains(center) {
                                     on_ev.run(GroupEvent::NodeAdded {
                                         group_id: group.id.clone(),
@@ -204,18 +206,25 @@ where
                 };
 
                 let gs = use_context::<GroupStyle>().unwrap_or_default();
-                let color = group.color.clone().unwrap_or_else(|| gs.default_color.clone());
+                let color = group
+                    .color
+                    .clone()
+                    .unwrap_or_else(|| gs.default_color.clone());
                 let is_error = group.error;
                 let is_hovered = hovered.as_ref() == Some(&group.id);
 
                 let (border_color, bg_color) = if is_error {
                     (gs.error_border.clone(), gs.error_background.clone())
                 } else if is_hovered {
-                    (format!("color-mix(in srgb, {color} 80%, transparent)"),
-                     format!("color-mix(in srgb, {color} 20%, transparent)"))
+                    (
+                        format!("color-mix(in srgb, {color} 80%, transparent)"),
+                        format!("color-mix(in srgb, {color} 20%, transparent)"),
+                    )
                 } else {
-                    (format!("color-mix(in srgb, {color} 50%, transparent)"),
-                     format!("color-mix(in srgb, {color} 10%, transparent)"))
+                    (
+                        format!("color-mix(in srgb, {color} 50%, transparent)"),
+                        format!("color-mix(in srgb, {color} 10%, transparent)"),
+                    )
                 };
 
                 let border_style = if is_hovered { "solid" } else { "dashed" };
@@ -225,7 +234,10 @@ where
                      pointer-events: none; z-index: 0; \
                      background: {bg_color}; border: 1px {border_style} {border_color}; \
                      border-radius: {}; transition: background 0.15s, border 0.15s;",
-                    final_bounds.x, final_bounds.y, final_bounds.width, final_bounds.height,
+                    final_bounds.x,
+                    final_bounds.y,
+                    final_bounds.width,
+                    final_bounds.height,
                     gs.border_radius,
                 );
 
@@ -249,7 +261,8 @@ where
                                 group_id=group_id
                                 on_rename=on_event_rename
                             />
-                        }.into_any()
+                        }
+                        .into_any()
                     })
                 };
 
@@ -341,7 +354,8 @@ fn GroupLabel<N: NodeId>(
                     }
                     on:mousedown=move |ev: web_sys::MouseEvent| { ev.stop_propagation(); }
                 />
-            }.into_any()
+            }
+            .into_any()
         } else {
             view! {
                 <span
@@ -353,7 +367,8 @@ fn GroupLabel<N: NodeId>(
                 >
                     {move || text.get()}
                 </span>
-            }.into_any()
+            }
+            .into_any()
         }
     }
 }
@@ -374,8 +389,16 @@ fn compute_bounds<N: NodeId>(
         if let Some(entry) = nodes.get(node_id) {
             let x = entry.position.x;
             let y = entry.position.y;
-            let w = if entry.size.width > 0.0 { entry.size.width } else { 160.0 };
-            let h = if entry.size.height > 0.0 { entry.size.height } else { 80.0 };
+            let w = if entry.size.width > 0.0 {
+                entry.size.width
+            } else {
+                160.0
+            };
+            let h = if entry.size.height > 0.0 {
+                entry.size.height
+            } else {
+                80.0
+            };
 
             min_x = min_x.min(x);
             min_y = min_y.min(y);

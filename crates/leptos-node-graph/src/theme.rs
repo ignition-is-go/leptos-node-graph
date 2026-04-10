@@ -1,33 +1,19 @@
 /// Style configuration for the node creation menu.
 #[derive(Clone, Debug)]
 pub struct NodeMenuStyle {
-    /// Menu panel background.
     pub background: String,
-    /// Menu panel border.
     pub border: String,
-    /// Menu panel box shadow.
     pub shadow: String,
-    /// Search input background.
     pub input_background: String,
-    /// Search input border.
     pub input_border: String,
-    /// Search input text color.
     pub input_color: String,
-    /// Placeholder text color.
     pub placeholder_color: String,
-    /// Category header text color.
     pub category_color: String,
-    /// Menu item text color.
     pub item_color: String,
-    /// Menu item description color.
     pub description_color: String,
-    /// Hover/selected background.
     pub hover_background: String,
-    /// Port sub-item text color.
     pub port_color: String,
-    /// "No matching nodes" text color.
     pub empty_color: String,
-    /// Divider/border between sections.
     pub divider: String,
 }
 
@@ -55,21 +41,13 @@ impl Default for NodeMenuStyle {
 /// Style configuration for group box overlays.
 #[derive(Clone, Debug)]
 pub struct GroupStyle {
-    /// Default group color when none specified.
     pub default_color: String,
-    /// Border radius.
     pub border_radius: String,
-    /// Error state border color.
     pub error_border: String,
-    /// Error state background.
     pub error_background: String,
-    /// Error state label color.
     pub error_label_color: String,
-    /// Label font size.
     pub label_font_size: String,
-    /// Label font weight.
     pub label_font_weight: String,
-    /// Rename input border color (uses group color by default, this is fallback).
     pub input_background: String,
 }
 
@@ -84,6 +62,64 @@ impl Default for GroupStyle {
             label_font_size: "10px".into(),
             label_font_weight: "600".into(),
             input_background: "transparent".into(),
+        }
+    }
+}
+
+/// Style configuration for anchor (port) rendering.
+/// The library renders the full anchor row: dot + label/children.
+#[derive(Clone, Debug)]
+pub struct AnchorStyle {
+    /// Dot size in pixels.
+    pub dot_size: f64,
+    /// Dot border width.
+    pub dot_border_width: f64,
+    /// Dot default border color (unconnected, no draft).
+    pub dot_color: String,
+    /// Dot color when connected.
+    pub dot_connected_color: String,
+    /// Dot color when compatible with draft.
+    pub dot_compatible_color: String,
+    /// Dot glow when compatible.
+    pub dot_compatible_shadow: String,
+    /// Label font size.
+    pub label_font_size: String,
+    /// Label default color.
+    pub label_color: String,
+    /// Label color when compatible.
+    pub label_compatible_color: String,
+    /// Row padding.
+    pub row_padding: String,
+    /// Row gap between dot and label.
+    pub row_gap: String,
+    /// Opacity when incompatible during draft.
+    pub incompatible_opacity: f64,
+    /// Tooltip background.
+    pub tooltip_background: String,
+    /// Tooltip border.
+    pub tooltip_border: String,
+    /// Tooltip text color.
+    pub tooltip_color: String,
+}
+
+impl Default for AnchorStyle {
+    fn default() -> Self {
+        Self {
+            dot_size: 8.0,
+            dot_border_width: 1.5,
+            dot_color: "#71717a".into(),
+            dot_connected_color: "#71717a".into(),
+            dot_compatible_color: "#22d3ee".into(),
+            dot_compatible_shadow: "0 0 6px #22d3ee, 0 0 12px rgba(34,211,238,0.3)".into(),
+            label_font_size: "11px".into(),
+            label_color: "#a1a1aa".into(),
+            label_compatible_color: "#22d3ee".into(),
+            row_padding: "4px 10px".into(),
+            row_gap: "6px".into(),
+            incompatible_opacity: 0.25,
+            tooltip_background: "#27272a".into(),
+            tooltip_border: "1px solid #3f3f46".into(),
+            tooltip_color: "#a1a1aa".into(),
         }
     }
 }

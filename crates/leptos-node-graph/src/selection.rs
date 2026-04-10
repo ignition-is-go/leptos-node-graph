@@ -47,8 +47,12 @@ where
             format!(
                 "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
                  border: {}; background: {}; pointer-events: none; z-index: 1000;",
-                screen_pos.x, screen_pos.y, width, height,
-                style_config.border, style_config.background
+                screen_pos.x,
+                screen_pos.y,
+                width,
+                height,
+                style_config.border,
+                style_config.background
             )
         })
     };

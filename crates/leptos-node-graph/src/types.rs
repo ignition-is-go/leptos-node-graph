@@ -4,7 +4,25 @@ use std::hash::Hash;
 
 /// Consumer implements this to define port type compatibility.
 pub trait PortType: Clone + PartialEq + Debug + Send + Sync + 'static {
+    /// Returns true if a connection from `source` output to `target` input is valid.
     fn compatible(source: &Self, target: &Self) -> bool;
+
+    /// Returns a string identifier for this port type, used for menu filtering.
+    /// Must round-trip with `from_type_id`.
+    fn type_id(&self) -> String;
+
+    /// Reconstruct a port type from its string identifier.
+    /// Must round-trip with `type_id`.
+    fn from_type_id(id: &str) -> Self;
+
+    /// Check compatibility using string type IDs.
+    /// Default uses `from_type_id` + `compatible`. Override if you need custom logic.
+    fn compatible_by_id(source_id: &str, target_id: &str) -> bool {
+        Self::compatible(
+            &Self::from_type_id(source_id),
+            &Self::from_type_id(target_id),
+        )
+    }
 }
 
 pub trait NodeId: Clone + Eq + Hash + Debug + Send + Sync + 'static {}
@@ -88,17 +106,39 @@ where
     P: PortId,
     C: ConnectionId,
 {
-    NodeMoved { id: N, position: Position },
-    NodeResized { id: N, size: Size },
-    ConnectionRequested { source: P, target: P },
-    ConnectionRemoved { id: C },
-    SelectionChanged { nodes: HashSet<N>, connections: HashSet<C> },
-    NodesDeleted { ids: Vec<N> },
-    NodesCopied { ids: Vec<N> },
-    NodesPasted { offset: Position },
+    NodeMoved {
+        id: N,
+        position: Position,
+    },
+    NodeResized {
+        id: N,
+        size: Size,
+    },
+    ConnectionRequested {
+        source: P,
+        target: P,
+    },
+    ConnectionRemoved {
+        id: C,
+    },
+    SelectionChanged {
+        nodes: HashSet<N>,
+        connections: HashSet<C>,
+    },
+    NodesDeleted {
+        ids: Vec<N>,
+    },
+    NodesCopied {
+        ids: Vec<N>,
+    },
+    NodesPasted {
+        offset: Position,
+    },
     Undo,
     Redo,
-    GroupCreated { node_ids: Vec<N> },
+    GroupCreated {
+        node_ids: Vec<N>,
+    },
     /// User selected a node type from the creation menu.
     /// Consumer should create the node, and if `connect_from`/`connect_to` are set,
     /// also create a connection between them.

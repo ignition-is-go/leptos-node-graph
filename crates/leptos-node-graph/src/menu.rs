@@ -13,6 +13,8 @@ pub struct MenuPort {
     pub label: String,
     /// Port direction.
     pub direction: PortDirection,
+    /// Type identifier for compatibility checking (matched against draft port type).
+    pub type_id: String,
 }
 
 /// A menu item representing a node type that can be created.
@@ -50,9 +52,23 @@ pub struct NodeMenuContext {
 }
 
 /// Whether the menu was opened during a draft connection.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DraftContext {
     pub origin_direction: PortDirection,
+    /// Type ID of the draft source port (for compatibility filtering).
+    pub source_type_id: String,
+    /// Compatibility checker: given (output_type_id, input_type_id),
+    /// returns true if they can connect.
+    pub is_compatible: Callback<(String, String), bool>,
+}
+
+impl std::fmt::Debug for DraftContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DraftContext")
+            .field("origin_direction", &self.origin_direction)
+            .field("source_type_id", &self.source_type_id)
+            .finish()
+    }
 }
 
 /// A searchable node creation menu.
@@ -73,8 +89,7 @@ pub fn NodeMenu(
     /// If set, menu was opened during a draft connection.
     #[prop(optional, into)]
     draft_context: Signal<Option<DraftContext>>,
-) -> impl IntoView
-{
+) -> impl IntoView {
     provide_context(NodeMenuContext { open_at });
 
     let ms = use_context::<NodeMenuStyle>().unwrap_or_default();
@@ -161,7 +176,8 @@ pub fn NodeMenu(
                             PortDirection::Output => PortDirection::Input,
                             PortDirection::Input => PortDirection::Output,
                         };
-                        item.ports.iter()
+                        item.ports
+                            .iter()
                             .find(|p| p.direction == target_dir)
                             .map(|p| p.id.clone())
                     });
@@ -243,8 +259,30 @@ pub fn NodeMenu(
                                 </div>
                             }.into_any()
                         } else {
+                            // In draft mode, filter out items with no compatible ports
+                            let filtered_items: Vec<_> = if dc.is_some() {
+                                current_items.into_iter().filter(|item| {
+                                    let dc_ref = dc.as_ref().unwrap();
+                                    let target_dir = match dc_ref.origin_direction {
+                                        PortDirection::Output => PortDirection::Input,
+                                        PortDirection::Input => PortDirection::Output,
+                                    };
+                                    item.ports.iter().any(|p| {
+                                        if p.direction != target_dir { return false; }
+                                        let (src, tgt) = if dc_ref.origin_direction == PortDirection::Output {
+                                            (dc_ref.source_type_id.clone(), p.type_id.clone())
+                                        } else {
+                                            (p.type_id.clone(), dc_ref.source_type_id.clone())
+                                        };
+                                        dc_ref.is_compatible.run((src, tgt))
+                                    })
+                                }).collect()
+                            } else {
+                                current_items
+                            };
+
                             let mut last_category: Option<String> = None;
-                            current_items
+                            filtered_items
                                 .into_iter()
                                 .enumerate()
                                 .map(|(i, item)| {
@@ -270,26 +308,6 @@ pub fn NodeMenu(
                                         None
                                     };
 
-                                    let has_visible_ports = dc_inner.is_some() && item.ports.iter().filter(|p| {
-                                        dc_inner.as_ref().map_or(false, |dc| {
-                                            let target = match dc.origin_direction {
-                                                PortDirection::Output => PortDirection::Input,
-                                                PortDirection::Input => PortDirection::Output,
-                                            };
-                                            p.direction == target
-                                        })
-                                    }).count() > 1;
-                                    let item_bg = if is_selected && !has_visible_ports {
-                                        format!("background: {};", ms.hover_background)
-                                    } else {
-                                        String::new()
-                                    };
-
-                                    let item_style = format!(
-                                        "padding: 6px 12px; cursor: pointer; font-size: 12px; \
-                                         color: {}; {item_bg}", ms.item_color
-                                    );
-
                                     let desc = item.description.clone();
                                     let item_id = item.id.clone();
 
@@ -301,14 +319,34 @@ pub fn NodeMenu(
                                         }
                                     });
 
-                                    let compatible_ports: Vec<_> = if let Some(dir) = target_dir {
+                                    let compatible_ports: Vec<_> = if let (Some(dir), Some(dc)) = (target_dir, &dc_inner) {
                                         item.ports.iter()
-                                            .filter(|p| p.direction == dir)
+                                            .filter(|p| {
+                                                if p.direction != dir { return false; }
+                                                let (src, tgt) = if dc.origin_direction == PortDirection::Output {
+                                                    (dc.source_type_id.clone(), p.type_id.clone())
+                                                } else {
+                                                    (p.type_id.clone(), dc.source_type_id.clone())
+                                                };
+                                                dc.is_compatible.run((src, tgt))
+                                            })
                                             .cloned()
                                             .collect()
                                     } else {
                                         vec![]
                                     };
+
+                                    let has_visible_ports = compatible_ports.len() > 1;
+                                    let item_bg = if is_selected && !has_visible_ports {
+                                        format!("background: {};", ms.hover_background)
+                                    } else {
+                                        String::new()
+                                    };
+
+                                    let item_style = format!(
+                                        "padding: 6px 12px; cursor: pointer; font-size: 12px; \
+                                         color: {}; {item_bg}", ms.item_color
+                                    );
 
                                     // Auto-connect port for single-port or no-draft cases
                                     let auto_port = if compatible_ports.len() == 1 {

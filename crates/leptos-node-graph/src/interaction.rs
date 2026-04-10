@@ -120,16 +120,18 @@ pub fn handle_canvas_mousemove<N, P, C, T>(
                                 canvas_pos.x - ds.offset.x,
                                 canvas_pos.y - ds.offset.y,
                             );
-                            let updates: Vec<(N, Position)> = ds.start_positions.iter().map(|(node_id, start_pos)| {
-                                let mut new_pos = Position::new(
-                                    start_pos.x + delta.x,
-                                    start_pos.y + delta.y,
-                                );
-                                if let Some(grid) = grid_size {
-                                    new_pos = utils::snap_to_grid(new_pos, grid);
-                                }
-                                (node_id.clone(), new_pos)
-                            }).collect();
+                            let updates: Vec<(N, Position)> = ds
+                                .start_positions
+                                .iter()
+                                .map(|(node_id, start_pos)| {
+                                    let mut new_pos =
+                                        Position::new(start_pos.x + delta.x, start_pos.y + delta.y);
+                                    if let Some(grid) = grid_size {
+                                        new_pos = utils::snap_to_grid(new_pos, grid);
+                                    }
+                                    (node_id.clone(), new_pos)
+                                })
+                                .collect();
                             reg.batch_set_positions(&updates);
                         }
                     });
@@ -150,9 +152,9 @@ pub fn handle_canvas_mousemove<N, P, C, T>(
         });
 
         // Select nodes in rect
-        let rect = registry.box_select.with_untracked(|bs| {
-            bs.as_ref().map(|bs| bs.to_rect())
-        });
+        let rect = registry
+            .box_select
+            .with_untracked(|bs| bs.as_ref().map(|bs| bs.to_rect()));
         if let Some(rect) = rect {
             let nodes_in = registry.nodes_in_rect(&rect);
             registry.selected_nodes.set(nodes_in);
@@ -192,9 +194,9 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
 
         // Emit NodeMoved for each selected node that was dragged
         for (node_id, _start_pos) in &drag.start_positions {
-            let current_pos = registry.nodes.with_untracked(|nodes| {
-                nodes.get(node_id).map(|n| n.position)
-            });
+            let current_pos = registry
+                .nodes
+                .with_untracked(|nodes| nodes.get(node_id).map(|n| n.position));
             if let Some(pos) = current_pos {
                 registry.emit(GraphEvent::NodeMoved {
                     id: node_id.clone(),
@@ -202,7 +204,6 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
                 });
             }
         }
-
     }
 
     // Cancel draft connection only if mouseup was NOT on an anchor or the node menu

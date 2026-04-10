@@ -35,7 +35,9 @@ impl<T: Clone + Send + Sync + 'static> UndoHistory<T> {
         let cmd = self.undo_stack.try_update(|stack| stack.pop()).flatten();
         if let Some(ref cmd) = cmd {
             self.redo_stack.update(|stack| {
-                stack.push(HistoryCommand { data: cmd.data.clone() });
+                stack.push(HistoryCommand {
+                    data: cmd.data.clone(),
+                });
             });
         }
         cmd.map(|c| c.data)
@@ -45,7 +47,9 @@ impl<T: Clone + Send + Sync + 'static> UndoHistory<T> {
         let cmd = self.redo_stack.try_update(|stack| stack.pop()).flatten();
         if let Some(ref cmd) = cmd {
             self.undo_stack.update(|stack| {
-                stack.push(HistoryCommand { data: cmd.data.clone() });
+                stack.push(HistoryCommand {
+                    data: cmd.data.clone(),
+                });
             });
         }
         cmd.map(|c| c.data)

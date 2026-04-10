@@ -36,14 +36,15 @@ where
     // Derived state signals
     let id_sel = id.clone();
     let reg_sel = registry.clone();
-    let is_selected = Signal::derive(move || {
-        reg_sel.selected_nodes.with(|sel| sel.contains(&id_sel))
-    });
+    let is_selected =
+        Signal::derive(move || reg_sel.selected_nodes.with(|sel| sel.contains(&id_sel)));
 
     let id_drag = id.clone();
     let reg_drag = registry.clone();
     let is_dragging = Signal::derive(move || {
-        reg_drag.drag_state.with(|ds| ds.as_ref().is_some_and(|d| d.node_id == id_drag))
+        reg_drag
+            .drag_state
+            .with(|ds| ds.as_ref().is_some_and(|d| d.node_id == id_drag))
     });
 
     // Provide context with state signals
@@ -98,78 +99,85 @@ where
     // Mouse down handler — native listener
     let reg_md = registry.clone();
     let id_md = id.clone();
-    let _ = use_event_listener(node_ref, leptos::ev::mousedown, move |ev: web_sys::MouseEvent| {
-        if ev.button() != 0 {
-            return;
-        }
-
-        // Skip if click was on an anchor dot or interactive form element
-        if let Some(target) = ev.target() {
-            use leptos::wasm_bindgen::JsCast;
-            if let Some(el) = target.dyn_ref::<web_sys::Element>() {
-                if el.closest("[data-anchor-dot]").ok().flatten().is_some() {
-                    return;
-                }
-                let tag = el.tag_name().to_uppercase();
-                if matches!(tag.as_str(), "INPUT" | "SELECT" | "TEXTAREA" | "BUTTON" | "OPTION") {
-                    return;
-                }
-            }
-        }
-
-        ev.stop_propagation();
-
-        let node_id = id_md.clone();
-
-        if ev.shift_key() {
-            reg_md.toggle_node_selection(node_id);
-        } else {
-            let already_selected = reg_md
-                .selected_nodes
-                .with_untracked(|sel| sel.contains(&node_id));
-            if !already_selected {
-                reg_md.select_node(node_id.clone());
+    let _ = use_event_listener(
+        node_ref,
+        leptos::ev::mousedown,
+        move |ev: web_sys::MouseEvent| {
+            if ev.button() != 0 {
+                return;
             }
 
-            // Start drag
-            let viewport = reg_md.viewport.get_untracked();
-            let container_rect = node_ref.with_untracked(|el| {
-                el.as_ref().and_then(|el| {
-                    el.closest(".node-editor").ok().flatten().map(|container| {
-                        container.get_bounding_client_rect()
+            // Skip if click was on an anchor dot or interactive form element
+            if let Some(target) = ev.target() {
+                use leptos::wasm_bindgen::JsCast;
+                if let Some(el) = target.dyn_ref::<web_sys::Element>() {
+                    if el.closest("[data-anchor-dot]").ok().flatten().is_some() {
+                        return;
+                    }
+                    let tag = el.tag_name().to_uppercase();
+                    if matches!(
+                        tag.as_str(),
+                        "INPUT" | "SELECT" | "TEXTAREA" | "BUTTON" | "OPTION"
+                    ) {
+                        return;
+                    }
+                }
+            }
+
+            ev.stop_propagation();
+
+            let node_id = id_md.clone();
+
+            if ev.shift_key() {
+                reg_md.toggle_node_selection(node_id);
+            } else {
+                let already_selected = reg_md
+                    .selected_nodes
+                    .with_untracked(|sel| sel.contains(&node_id));
+                if !already_selected {
+                    reg_md.select_node(node_id.clone());
+                }
+
+                // Start drag
+                let viewport = reg_md.viewport.get_untracked();
+                let container_rect = node_ref.with_untracked(|el| {
+                    el.as_ref().and_then(|el| {
+                        el.closest(".node-editor")
+                            .ok()
+                            .flatten()
+                            .map(|container| container.get_bounding_client_rect())
                     })
-                })
-            });
+                });
 
-            let (offset_x, offset_y) = container_rect
-                .map(|r| (r.left(), r.top()))
-                .unwrap_or((0.0, 0.0));
+                let (offset_x, offset_y) = container_rect
+                    .map(|r| (r.left(), r.top()))
+                    .unwrap_or((0.0, 0.0));
 
-            let canvas_mouse = viewport.screen_to_canvas(Position::new(
-                ev.client_x() as f64 - offset_x,
-                ev.client_y() as f64 - offset_y,
-            ));
+                let canvas_mouse = viewport.screen_to_canvas(Position::new(
+                    ev.client_x() as f64 - offset_x,
+                    ev.client_y() as f64 - offset_y,
+                ));
 
-            let start_positions: HashMap<N, Position> = reg_md.selected_nodes.with_untracked(
-                |sel| {
-                    reg_md.nodes.with_untracked(|nodes| {
-                        sel.iter()
-                            .filter_map(|nid| {
-                                nodes.get(nid).map(|entry| (nid.clone(), entry.position))
-                            })
-                            .collect()
-                    })
-                },
-            );
+                let start_positions: HashMap<N, Position> =
+                    reg_md.selected_nodes.with_untracked(|sel| {
+                        reg_md.nodes.with_untracked(|nodes| {
+                            sel.iter()
+                                .filter_map(|nid| {
+                                    nodes.get(nid).map(|entry| (nid.clone(), entry.position))
+                                })
+                                .collect()
+                        })
+                    });
 
-            reg_md.drag_state.set(Some(DragState {
-                node_id: node_id.clone(),
-                offset: canvas_mouse,
-                start_positions,
-                alt_key: ev.alt_key(),
-            }));
-        }
-    });
+                reg_md.drag_state.set(Some(DragState {
+                    node_id: node_id.clone(),
+                    offset: canvas_mouse,
+                    start_positions,
+                    alt_key: ev.alt_key(),
+                }));
+            }
+        },
+    );
 
     let node_style = move || {
         let pos = position.get();

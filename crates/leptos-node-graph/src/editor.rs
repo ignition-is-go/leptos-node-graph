@@ -5,8 +5,9 @@ use leptos::prelude::*;
 use leptos_use::use_event_listener;
 
 use crate::connection::ConnectionRenderer;
+use crate::group::GroupBoxOverlay;
 use crate::interaction;
-use crate::menu::{NodeMenu, NodeMenuItem, NodeMenuEvent, DraftContext};
+use crate::menu::{DraftContext, NodeMenu, NodeMenuEvent, NodeMenuItem};
 use crate::registry::{ConnectionEntry, EditorRegistry};
 use crate::selection::SelectionBox;
 use crate::types::*;
@@ -25,6 +26,12 @@ pub fn NodeEditor<N, P, C, T>(
     /// Two-way search text for the menu. Consumer reads this to filter menu_items.
     #[prop(optional)]
     menu_search: Option<RwSignal<String>>,
+    /// Optional groups to render as visual overlays behind nodes.
+    #[prop(optional, into)]
+    groups: Option<Signal<Vec<crate::group::GroupBox<N>>>>,
+    /// Callback for group events (rename, add/remove node).
+    #[prop(optional, into)]
+    on_group_event: Option<Callback<crate::group::GroupEvent<N>>>,
     children: Children,
 ) -> impl IntoView
 where
@@ -69,16 +76,24 @@ where
 
     let reg_mm = registry.clone();
     let ref_mm = container_ref;
-    let _mousemove_cleanup = use_event_listener(leptos::prelude::document(), leptos::ev::mousemove, move |ev: web_sys::MouseEvent| {
-        last_mouse.set(Position::new(ev.client_x() as f64, ev.client_y() as f64));
-        interaction::handle_canvas_mousemove(&reg_mm, ev, &ref_mm);
-    });
+    let _mousemove_cleanup = use_event_listener(
+        leptos::prelude::document(),
+        leptos::ev::mousemove,
+        move |ev: web_sys::MouseEvent| {
+            last_mouse.set(Position::new(ev.client_x() as f64, ev.client_y() as f64));
+            interaction::handle_canvas_mousemove(&reg_mm, ev, &ref_mm);
+        },
+    );
 
     let reg_mu = registry.clone();
     let ref_mu = container_ref;
-    let _mouseup_cleanup = use_event_listener(leptos::prelude::document(), leptos::ev::mouseup, move |ev: web_sys::MouseEvent| {
-        interaction::handle_canvas_mouseup(&reg_mu, ev, &ref_mu);
-    });
+    let _mouseup_cleanup = use_event_listener(
+        leptos::prelude::document(),
+        leptos::ev::mouseup,
+        move |ev: web_sys::MouseEvent| {
+            interaction::handle_canvas_mouseup(&reg_mu, ev, &ref_mu);
+        },
+    );
 
     let reg_wh = registry.clone();
     let ref_wh = container_ref;
@@ -94,10 +109,12 @@ where
             ev.prevent_default();
             let mouse = last_mouse.get_untracked();
             let (ox, oy) = ref_kd.with_untracked(|el| {
-                el.as_ref().map(|e| {
-                    let r = e.get_bounding_client_rect();
-                    (r.left(), r.top())
-                }).unwrap_or((0.0, 0.0))
+                el.as_ref()
+                    .map(|e| {
+                        let r = e.get_bounding_client_rect();
+                        (r.left(), r.top())
+                    })
+                    .unwrap_or((0.0, 0.0))
             });
             let vp = reg_kd.viewport.get_untracked();
             let canvas_pos = vp.screen_to_canvas(Position::new(mouse.x - ox, mouse.y - oy));
@@ -111,19 +128,24 @@ where
     // Double-click opens the menu
     let reg_dbl = registry.clone();
     let on_dblclick = move |ev: web_sys::MouseEvent| {
-        if !has_menu { return; }
+        if !has_menu {
+            return;
+        }
         // Only on empty canvas
         if let Some(target) = ev.target() {
             use leptos::wasm_bindgen::JsCast;
             if let Some(el) = target.dyn_ref::<web_sys::Element>() {
-                if el.closest("[data-node]").ok().flatten().is_some() { return; }
-                if el.closest("[data-anchor]").ok().flatten().is_some() { return; }
+                if el.closest("[data-node]").ok().flatten().is_some() {
+                    return;
+                }
+                if el.closest("[data-anchor]").ok().flatten().is_some() {
+                    return;
+                }
             }
         }
         let vp = reg_dbl.viewport.get_untracked();
-        let container_rect = container_ref.with_untracked(|el| {
-            el.as_ref().map(|e| e.get_bounding_client_rect())
-        });
+        let container_rect =
+            container_ref.with_untracked(|el| el.as_ref().map(|e| e.get_bounding_client_rect()));
         let (ox, oy) = container_rect
             .as_ref()
             .map(|r| (r.left(), r.top()))
@@ -133,7 +155,10 @@ where
             ev.client_y() as f64 - oy,
         ));
         menu_open_at.set(Some(canvas_pos));
-        menu_screen_pos.set(Some(Position::new(ev.client_x() as f64, ev.client_y() as f64)));
+        menu_screen_pos.set(Some(Position::new(
+            ev.client_x() as f64,
+            ev.client_y() as f64,
+        )));
     };
 
     // Menu event handler — emits GraphEvent::CreateNode and clears draft
@@ -141,14 +166,17 @@ where
     let on_event_menu = on_event.clone();
     let on_menu_event = Callback::new(move |event: NodeMenuEvent| {
         match event {
-            NodeMenuEvent::CreateNode { item_id, position, connect_to_port } => {
+            NodeMenuEvent::CreateNode {
+                item_id,
+                position,
+                connect_to_port,
+            } => {
                 // Capture draft info before clearing
-                let (connect_from, connect_dir) = reg_menu.draft_connection.with_untracked(|d| {
-                    match d {
+                let (connect_from, connect_dir) =
+                    reg_menu.draft_connection.with_untracked(|d| match d {
                         Some(d) => (Some(d.source_port.clone()), Some(d.origin_direction)),
                         None => (None, None),
-                    }
-                });
+                    });
 
                 // Clear the draft
                 reg_menu.draft_connection.set(None);
@@ -168,12 +196,24 @@ where
         }
     });
 
-    // Draft context for the menu (drives port sub-item visibility)
+    // Draft context for the menu (drives port sub-item visibility + type filtering)
     let reg_draft = registry.clone();
+    let compat_cb = Callback::new(|(src, tgt): (String, String)| T::compatible_by_id(&src, &tgt));
     let draft_context = Signal::derive(move || {
         reg_draft.draft_connection.with(|d| {
-            d.as_ref().map(|d| DraftContext {
-                origin_direction: d.origin_direction,
+            d.as_ref().map(|d| {
+                let source_type_id = reg_draft.ports.with_untracked(|ports| {
+                    ports
+                        .get(&d.source_port)
+                        .map(|p| p.port_type.type_id())
+                        .unwrap_or_default()
+                });
+
+                DraftContext {
+                    origin_direction: d.origin_direction,
+                    source_type_id,
+                    is_compatible: compat_cb.clone(),
+                }
             })
         })
     });
@@ -190,6 +230,25 @@ where
     // Menu items (use empty vec if not provided)
     let menu_items_signal = menu_items.unwrap_or_else(|| Signal::derive(|| vec![]));
 
+    // Groups overlay
+    let groups_signal = groups.unwrap_or_else(|| Signal::derive(|| vec![]));
+    let groups_view = if let Some(cb) = on_group_event {
+        view! {
+            <GroupBoxOverlay<N, P, C, T>
+                groups=groups_signal
+                on_event=cb
+            />
+        }
+        .into_any()
+    } else {
+        view! {
+            <GroupBoxOverlay<N, P, C, T>
+                groups=groups_signal
+            />
+        }
+        .into_any()
+    };
+
     let menu_screen_pos_signal = Signal::derive(move || menu_screen_pos.get());
 
     view! {
@@ -205,6 +264,7 @@ where
         >
             <div class="node-editor__canvas" style=canvas_transform>
                 <ConnectionRenderer<N, P, C, T> />
+                {groups_view}
                 {children()}
             </div>
             <SelectionBox<N, P, C, T> />

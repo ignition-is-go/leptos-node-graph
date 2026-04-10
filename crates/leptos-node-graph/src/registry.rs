@@ -122,7 +122,12 @@ where
     }
 
     /// Register a node at the given position.
-    pub fn register_node(&self, id: N, position: Position, position_signal: Option<RwSignal<Position>>) {
+    pub fn register_node(
+        &self,
+        id: N,
+        position: Position,
+        position_signal: Option<RwSignal<Position>>,
+    ) {
         self.nodes.update(|nodes| {
             nodes.insert(
                 id.clone(),
@@ -200,11 +205,10 @@ where
     /// consumer's data but not rendered (the connection renderer skips connections
     /// with missing ports). This allows connections to restore if the port reappears.
     pub fn deregister_port(&self, id: &P) {
-
         // Get the node_id and direction before removing
-        let port_info = self.ports.with_untracked(|ports| {
-            ports.get(id).map(|p| (p.node_id.clone(), p.direction))
-        });
+        let port_info = self
+            .ports
+            .with_untracked(|ports| ports.get(id).map(|p| (p.node_id.clone(), p.direction)));
 
         self.ports.update(|ports| {
             ports.remove(id);
@@ -234,9 +238,9 @@ where
 
     /// Update a node's position and its consumer signal. Used during drag for live feedback.
     pub fn set_node_position_with_signal(&self, id: &N, position: Position) {
-        let signal = self.nodes.with_untracked(|nodes| {
-            nodes.get(id).and_then(|e| e.position_signal)
-        });
+        let signal = self
+            .nodes
+            .with_untracked(|nodes| nodes.get(id).and_then(|e| e.position_signal));
         self.nodes.update(|nodes| {
             if let Some(entry) = nodes.get_mut(id) {
                 entry.position = position;
@@ -252,27 +256,32 @@ where
     /// Minimizes reactive notifications: 1 nodes update + 1 ports update + N signal sets.
     pub fn batch_set_positions(&self, updates: &[(N, Position)]) {
         // 1. Update node entries, collect position signals
-        let node_signals: Vec<(RwSignal<Position>, Position)> = self.nodes.try_update(|nodes| {
-            updates.iter().filter_map(|(id, pos)| {
-                if let Some(entry) = nodes.get_mut(id) {
-                    entry.position = *pos;
-                    entry.position_signal.map(|sig| (sig, *pos))
-                } else {
-                    None
-                }
-            }).collect()
-        }).unwrap_or_default();
+        let node_signals: Vec<(RwSignal<Position>, Position)> = self
+            .nodes
+            .try_update(|nodes| {
+                updates
+                    .iter()
+                    .filter_map(|(id, pos)| {
+                        if let Some(entry) = nodes.get_mut(id) {
+                            entry.position = *pos;
+                            entry.position_signal.map(|sig| (sig, *pos))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // 2. Batch-update port positions using cached offsets (one ports.update)
-        let update_map: HashMap<&N, &Position> = updates.iter().map(|(id, pos)| (id, pos)).collect();
+        let update_map: HashMap<&N, &Position> =
+            updates.iter().map(|(id, pos)| (id, pos)).collect();
         self.ports.update(|ports| {
             for entry in ports.values_mut() {
                 if let Some(new_node_pos) = update_map.get(&entry.node_id) {
                     if let Some(offset) = entry.offset {
-                        entry.position = Position::new(
-                            new_node_pos.x + offset.x,
-                            new_node_pos.y + offset.y,
-                        );
+                        entry.position =
+                            Position::new(new_node_pos.x + offset.x, new_node_pos.y + offset.y);
                     }
                 }
             }
@@ -317,7 +326,8 @@ where
 
     /// Get a port's position (untracked read).
     pub fn port_position(&self, id: &P) -> Option<Position> {
-        self.ports.with_untracked(|ports| ports.get(id).map(|e| e.position))
+        self.ports
+            .with_untracked(|ports| ports.get(id).map(|e| e.position))
     }
 
     /// Get a clone of a port entry (untracked read).
@@ -394,7 +404,9 @@ where
 
     /// Select all nodes.
     pub fn select_all(&self) {
-        let all_ids: HashSet<N> = self.nodes.with_untracked(|nodes| nodes.keys().cloned().collect());
+        let all_ids: HashSet<N> = self
+            .nodes
+            .with_untracked(|nodes| nodes.keys().cloned().collect());
         self.selected_nodes.set(all_ids);
     }
 

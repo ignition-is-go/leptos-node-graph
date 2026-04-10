@@ -20,6 +20,8 @@ pub struct AnchorContext {
     pub is_connected: Signal<bool>,
     pub has_broken_connections: Signal<bool>,
     pub dot_ref: NodeRef<leptos::html::Div>,
+    /// The port type identifier (from `PortType::type_id()`).
+    pub port_type_label: String,
 }
 
 /// Items for the anchor context menu.
@@ -153,9 +155,9 @@ where
         let node_pos = node_ctx.position.get();
 
         // Check if we have a cached offset
-        let offset = reg_pos.ports.with_untracked(|ports| {
-            ports.get(&id_pos).and_then(|p| p.offset)
-        });
+        let offset = reg_pos
+            .ports
+            .with_untracked(|ports| ports.get(&id_pos).and_then(|p| p.offset));
 
         if let Some(offset) = offset {
             // Use cached offset (fast path — no DOM query)
@@ -175,9 +177,14 @@ where
         let nid = node_ctx.id.clone();
         crate::raf::request_animation_frame(move || {
             let node_pos = reg.nodes.with_untracked(|nodes| {
-                nodes.get(&nid).map(|n| {
-                    n.position_signal.map(|s| s.get_untracked()).unwrap_or(n.position)
-                }).unwrap_or_default()
+                nodes
+                    .get(&nid)
+                    .map(|n| {
+                        n.position_signal
+                            .map(|s| s.get_untracked())
+                            .unwrap_or(n.position)
+                    })
+                    .unwrap_or_default()
             });
 
             if let Some(dot_el) = dot_ref.get_untracked() {
@@ -199,10 +206,8 @@ where
                     let canvas_pos = viewport.screen_to_canvas(Position::new(screen_x, screen_y));
                     reg.set_port_position(&id, canvas_pos);
 
-                    let offset = Position::new(
-                        canvas_pos.x - node_pos.x,
-                        canvas_pos.y - node_pos.y,
-                    );
+                    let offset =
+                        Position::new(canvas_pos.x - node_pos.x, canvas_pos.y - node_pos.y);
                     reg.set_port_offset(&id, offset);
                 }
             }
@@ -213,81 +218,94 @@ where
     let reg_md = registry.clone();
     let id_md = id.clone();
     let pt = port_type.clone();
-    let _ = use_event_listener(anchor_ref, leptos::ev::mousedown, move |ev: web_sys::MouseEvent| {
-        let has_draft = reg_md.draft_connection.with_untracked(|d| d.is_some());
+    let _ = use_event_listener(
+        anchor_ref,
+        leptos::ev::mousedown,
+        move |ev: web_sys::MouseEvent| {
+            let has_draft = reg_md.draft_connection.with_untracked(|d| d.is_some());
 
-        if has_draft {
-            // Complete an existing draft — clicking anywhere on the anchor row is fine
-            ev.stop_propagation();
-            ev.prevent_default();
-            try_complete_connection(&reg_md, &id_md, direction);
-        } else {
-            // Start a new draft — only from the dot element
-            let on_dot = if let Some(target) = ev.target() {
-                use leptos::wasm_bindgen::JsCast;
-                target.dyn_ref::<web_sys::Element>()
-                    .map_or(false, |el| el.closest("[data-anchor-dot]").ok().flatten().is_some())
+            if has_draft {
+                // Complete an existing draft — clicking anywhere on the anchor row is fine
+                ev.stop_propagation();
+                ev.prevent_default();
+                try_complete_connection(&reg_md, &id_md, direction);
             } else {
-                false
-            };
+                // Start a new draft — only from the dot element
+                let on_dot = if let Some(target) = ev.target() {
+                    use leptos::wasm_bindgen::JsCast;
+                    target.dyn_ref::<web_sys::Element>().map_or(false, |el| {
+                        el.closest("[data-anchor-dot]").ok().flatten().is_some()
+                    })
+                } else {
+                    false
+                };
 
-            if !on_dot { return; }
-
-            ev.stop_propagation();
-            ev.prevent_default();
-
-            // If this is a connected input, disconnect and re-route from the original output
-            if direction == PortDirection::Input {
-                let existing = reg_md.connections.with_untracked(|conns| {
-                    conns.iter()
-                        .find(|(_, c)| c.target == id_md)
-                        .map(|(conn_id, c)| (conn_id.clone(), c.source.clone()))
-                });
-
-                if let Some((conn_id, source_port_id)) = existing {
-                    // Remove the connection
-                    reg_md.emit(GraphEvent::ConnectionRemoved { id: conn_id });
-
-                    // Start draft from the original output
-                    if let Some(source_entry) = reg_md.get_port(&source_port_id) {
-                        let source_pos = reg_md.port_position(&source_port_id).unwrap_or_default();
-                        reg_md.draft_connection.set(Some(DraftConnection {
-                            source_port: source_port_id,
-                            source_position: source_pos,
-                            port_type: source_entry.port_type.clone(),
-                            current_end: source_pos,
-                            origin_direction: PortDirection::Output,
-                        }));
-                    }
+                if !on_dot {
                     return;
                 }
-            }
 
-            // Normal: start a new draft from this port
-            let port_pos = reg_md.port_position(&id_md);
-            if let Some(pos) = port_pos {
-                reg_md.draft_connection.set(Some(DraftConnection {
-                    source_port: id_md.clone(),
-                    source_position: pos,
-                    port_type: pt.clone(),
-                    current_end: pos,
-                    origin_direction: direction,
-                }));
+                ev.stop_propagation();
+                ev.prevent_default();
+
+                // If this is a connected input, disconnect and re-route from the original output
+                if direction == PortDirection::Input {
+                    let existing = reg_md.connections.with_untracked(|conns| {
+                        conns
+                            .iter()
+                            .find(|(_, c)| c.target == id_md)
+                            .map(|(conn_id, c)| (conn_id.clone(), c.source.clone()))
+                    });
+
+                    if let Some((conn_id, source_port_id)) = existing {
+                        // Remove the connection
+                        reg_md.emit(GraphEvent::ConnectionRemoved { id: conn_id });
+
+                        // Start draft from the original output
+                        if let Some(source_entry) = reg_md.get_port(&source_port_id) {
+                            let source_pos =
+                                reg_md.port_position(&source_port_id).unwrap_or_default();
+                            reg_md.draft_connection.set(Some(DraftConnection {
+                                source_port: source_port_id,
+                                source_position: source_pos,
+                                port_type: source_entry.port_type.clone(),
+                                current_end: source_pos,
+                                origin_direction: PortDirection::Output,
+                            }));
+                        }
+                        return;
+                    }
+                }
+
+                // Normal: start a new draft from this port
+                let port_pos = reg_md.port_position(&id_md);
+                if let Some(pos) = port_pos {
+                    reg_md.draft_connection.set(Some(DraftConnection {
+                        source_port: id_md.clone(),
+                        source_position: pos,
+                        port_type: pt.clone(),
+                        current_end: pos,
+                        origin_direction: direction,
+                    }));
+                }
             }
-        }
-    });
+        },
+    );
 
     // Mouseup: complete a drag-to-connect on any port
     let reg_mu = registry.clone();
     let id_mu = id.clone();
-    let _ = use_event_listener(anchor_ref, leptos::ev::mouseup, move |ev: web_sys::MouseEvent| {
-        let has_draft = reg_mu.draft_connection.with_untracked(|d| d.is_some());
-        if has_draft {
-            if try_complete_connection(&reg_mu, &id_mu, direction) {
-                ev.stop_propagation();
+    let _ = use_event_listener(
+        anchor_ref,
+        leptos::ev::mouseup,
+        move |ev: web_sys::MouseEvent| {
+            let has_draft = reg_mu.draft_connection.with_untracked(|d| d.is_some());
+            if has_draft {
+                if try_complete_connection(&reg_mu, &id_mu, direction) {
+                    ev.stop_propagation();
+                }
             }
-        }
-    });
+        },
+    );
 
     // Derived state signals
     // A port is a valid drop target if it's the opposite direction from the draft origin,
@@ -297,11 +315,21 @@ where
     let is_compatible = Signal::derive(move || {
         reg_compat.draft_connection.with(|d| {
             let Some(d) = d.as_ref() else { return false };
-            if direction == d.origin_direction { return false; }
-            if d.source_port == id_compat { return false; }
-            let Some(this_port) = reg_compat.get_port(&id_compat) else { return false };
-            let Some(draft_port) = reg_compat.get_port(&d.source_port) else { return false };
-            if this_port.node_id == draft_port.node_id { return false; }
+            if direction == d.origin_direction {
+                return false;
+            }
+            if d.source_port == id_compat {
+                return false;
+            }
+            let Some(this_port) = reg_compat.get_port(&id_compat) else {
+                return false;
+            };
+            let Some(draft_port) = reg_compat.get_port(&d.source_port) else {
+                return false;
+            };
+            if this_port.node_id == draft_port.node_id {
+                return false;
+            }
             let (out_type, in_type) = if d.origin_direction == PortDirection::Output {
                 (&draft_port.port_type, &this_port.port_type)
             } else {
@@ -316,11 +344,21 @@ where
     let is_incompatible = Signal::derive(move || {
         reg_incompat.draft_connection.with(|d| {
             let Some(d) = d.as_ref() else { return false };
-            if d.source_port == id_incompat { return false; } // source is not incompatible
-            if direction == d.origin_direction { return true; } // same direction = can't connect
-            let Some(this_port) = reg_incompat.get_port(&id_incompat) else { return true };
-            let Some(draft_port) = reg_incompat.get_port(&d.source_port) else { return true };
-            if this_port.node_id == draft_port.node_id { return true; }
+            if d.source_port == id_incompat {
+                return false;
+            } // source is not incompatible
+            if direction == d.origin_direction {
+                return true;
+            } // same direction = can't connect
+            let Some(this_port) = reg_incompat.get_port(&id_incompat) else {
+                return true;
+            };
+            let Some(draft_port) = reg_incompat.get_port(&d.source_port) else {
+                return true;
+            };
+            if this_port.node_id == draft_port.node_id {
+                return true;
+            }
             let (out_type, in_type) = if d.origin_direction == PortDirection::Output {
                 (&draft_port.port_type, &this_port.port_type)
             } else {
@@ -333,16 +371,18 @@ where
     let id_source = id.clone();
     let reg_source = registry.clone();
     let is_source = Signal::derive(move || {
-        reg_source.draft_connection.with(|d| {
-            d.as_ref().map_or(false, |d| d.source_port == id_source)
-        })
+        reg_source
+            .draft_connection
+            .with(|d| d.as_ref().map_or(false, |d| d.source_port == id_source))
     });
 
     let id_conn = id.clone();
     let reg_conn = registry.clone();
     let is_connected = Signal::derive(move || {
         reg_conn.connections.with(|conns| {
-            conns.values().any(|c| c.source == id_conn || c.target == id_conn)
+            conns
+                .values()
+                .any(|c| c.source == id_conn || c.target == id_conn)
         })
     });
 
@@ -354,7 +394,9 @@ where
             reg_broken.ports.with_untracked(|ports| {
                 conns.values().any(|c| {
                     let involves_me = c.source == id_broken || c.target == id_broken;
-                    if !involves_me { return false; }
+                    if !involves_me {
+                        return false;
+                    }
                     let source_ok = ports.contains_key(&c.source);
                     let target_ok = ports.contains_key(&c.target);
                     source_ok != target_ok // exactly one side missing
@@ -370,13 +412,17 @@ where
     let reg_menu = registry.clone();
     let menu_items = Signal::derive(move || {
         let has_conns = reg_menu.connections.with(|conns| {
-            conns.values().any(|c| c.source == id_menu || c.target == id_menu)
+            conns
+                .values()
+                .any(|c| c.source == id_menu || c.target == id_menu)
         });
         let has_broken = reg_menu.connections.with(|conns| {
             reg_menu.ports.with_untracked(|ports| {
                 conns.values().any(|c| {
                     let involves_me = c.source == id_menu || c.target == id_menu;
-                    if !involves_me { return false; }
+                    if !involves_me {
+                        return false;
+                    }
                     !ports.contains_key(&c.source) || !ports.contains_key(&c.target)
                 })
             })
@@ -402,7 +448,8 @@ where
         match action {
             AnchorMenuAction::RemoveConnections => {
                 let to_remove: Vec<_> = reg_action.connections.with_untracked(|conns| {
-                    conns.values()
+                    conns
+                        .values()
                         .filter(|c| c.source == id_action || c.target == id_action)
                         .map(|c| c.id.clone())
                         .collect()
@@ -414,10 +461,12 @@ where
             AnchorMenuAction::RemoveBrokenConnections => {
                 let to_remove: Vec<_> = reg_action.connections.with_untracked(|conns| {
                     reg_action.ports.with_untracked(|ports| {
-                        conns.values()
+                        conns
+                            .values()
                             .filter(|c| {
                                 let involves = c.source == id_action || c.target == id_action;
-                                let broken = !ports.contains_key(&c.source) || !ports.contains_key(&c.target);
+                                let broken = !ports.contains_key(&c.source)
+                                    || !ports.contains_key(&c.target);
                                 involves && broken
                             })
                             .map(|c| c.id.clone())
@@ -444,16 +493,27 @@ where
     provide_context(menu_state);
 
     // Right-click handler
-    let _ = use_event_listener(anchor_ref, leptos::ev::contextmenu, move |ev: web_sys::MouseEvent| {
-        ev.prevent_default();
-        ev.stop_propagation();
-        ctx_menu_pos.set(Some(Position::new(ev.client_x() as f64, ev.client_y() as f64)));
-    });
+    let _ = use_event_listener(
+        anchor_ref,
+        leptos::ev::contextmenu,
+        move |ev: web_sys::MouseEvent| {
+            ev.prevent_default();
+            ev.stop_propagation();
+            ctx_menu_pos.set(Some(Position::new(
+                ev.client_x() as f64,
+                ev.client_y() as f64,
+            )));
+        },
+    );
 
     // Close context menu on any click elsewhere
-    let _ = use_event_listener(leptos::prelude::document(), leptos::ev::pointerdown, move |_ev: web_sys::PointerEvent| {
-        ctx_menu_pos.set(None);
-    });
+    let _ = use_event_listener(
+        leptos::prelude::document(),
+        leptos::ev::pointerdown,
+        move |_ev: web_sys::PointerEvent| {
+            ctx_menu_pos.set(None);
+        },
+    );
 
     // Provide anchor context
     let anchor_ctx = AnchorContext {
@@ -464,18 +524,126 @@ where
         is_connected,
         has_broken_connections,
         dot_ref,
+        port_type_label: port_type.type_id(),
     };
     provide_context(anchor_ctx);
 
-    let slot_content = if let Some(children) = children {
+    // Built-in anchor rendering: row > dot (with tooltip) > label or children
+    let as_ = use_context::<crate::theme::AnchorStyle>().unwrap_or_default();
+    let as2 = as_.clone();
+    let as3 = as_.clone();
+
+    let type_label = port_type.type_id();
+    let type_label2 = type_label.clone();
+    let is_output = direction == PortDirection::Output;
+
+    // Dot style
+    let dot_style = move || {
+        let compatible = is_compatible.get();
+        let source = is_source.get();
+        let connected = is_connected.get();
+
+        let (border_color, bg) = if compatible || source {
+            (
+                as_.dot_compatible_color.as_str(),
+                as_.dot_compatible_color.as_str(),
+            )
+        } else if connected {
+            (
+                as_.dot_connected_color.as_str(),
+                as_.dot_connected_color.as_str(),
+            )
+        } else {
+            (as_.dot_color.as_str(), "transparent")
+        };
+
+        let shadow = if compatible {
+            format!("box-shadow: {};", as_.dot_compatible_shadow)
+        } else {
+            String::new()
+        };
+
+        format!(
+            "width: {}px; height: {}px; border-radius: 50%; \
+             border: {}px solid {border_color}; background: {bg}; \
+             flex-shrink: 0; transition: all 0.15s; cursor: crosshair; {shadow}",
+            as_.dot_size, as_.dot_size, as_.dot_border_width,
+        )
+    };
+
+    // Row style
+    let row_style = move || {
+        let incompat = is_incompatible.get();
+        let opacity = if incompat {
+            as2.incompatible_opacity
+        } else {
+            1.0
+        };
+        let pointer = if incompat {
+            "pointer-events: none;"
+        } else {
+            ""
+        };
+        let dir = if is_output {
+            "flex-direction: row-reverse;"
+        } else {
+            ""
+        };
+
+        format!(
+            "display: flex; align-items: center; gap: {}; padding: {}; \
+             cursor: default; transition: opacity 0.15s; opacity: {opacity}; {pointer} {dir}",
+            as2.row_gap, as2.row_padding,
+        )
+    };
+
+    // Label style
+    let label_style = move || {
+        let color = if is_compatible.get() {
+            &as3.label_compatible_color
+        } else {
+            &as3.label_color
+        };
+        format!(
+            "font-size: {}; color: {color}; white-space: nowrap;",
+            as3.label_font_size
+        )
+    };
+
+    // Tooltip
+    let (dot_hovered, set_dot_hovered) = signal(false);
+    let tooltip_style = use_context::<crate::theme::AnchorStyle>().unwrap_or_default();
+    let tooltip_view = move || {
+        if !dot_hovered.get() {
+            return None;
+        }
+        let align = if is_output {
+            "right: 100%; margin-right: 6px;"
+        } else {
+            "left: 100%; margin-left: 6px;"
+        };
+        let style = format!(
+            "position: absolute; top: 50%; transform: translateY(-50%); {align} \
+             background: {}; border: {}; border-radius: 4px; \
+             padding: 2px 6px; font-size: 10px; color: {}; white-space: nowrap; \
+             pointer-events: none; z-index: 100;",
+            tooltip_style.tooltip_background,
+            tooltip_style.tooltip_border,
+            tooltip_style.tooltip_color,
+        );
+        Some(view! { <div style=style>{type_label2.clone()}</div> })
+    };
+
+    // Content: children override the label
+    let label_or_children = if let Some(children) = children {
         children()
     } else if let Some(l) = label {
-        view! { <span>{l}</span> }.into_any()
+        view! { <span style=label_style>{l}</span> }.into_any()
     } else {
         ().into_any()
     };
 
-    // Built-in context menu rendering
+    // Context menu
     let ms = use_context::<crate::theme::NodeMenuStyle>().unwrap_or_default();
     let ctx_menu_view = move || {
         let pos = ctx_menu_pos.get()?;
@@ -522,8 +690,17 @@ where
         <div
             node_ref=anchor_ref
             data-anchor=""
+            style=row_style
         >
-            {slot_content}
+            <div
+                style="position: relative; display: inline-flex;"
+                on:mouseenter=move |_| set_dot_hovered.set(true)
+                on:mouseleave=move |_| set_dot_hovered.set(false)
+            >
+                <div style=dot_style node_ref=dot_ref data-anchor-dot="" />
+                {tooltip_view}
+            </div>
+            {label_or_children}
         </div>
         {ctx_menu_view}
     }
