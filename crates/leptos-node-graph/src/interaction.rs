@@ -99,31 +99,43 @@ pub fn handle_canvas_mousemove<N, P, C, T>(
         return;
     }
 
-    // Node dragging
+    // Node dragging — store latest position and schedule RAF
     let has_drag = registry.drag_state.with_untracked(|ds| ds.is_some());
     if has_drag {
         let canvas_pos = canvas_pos_from_event(registry, &ev, container_ref);
-        let grid_size = registry.config.with_untracked(|c| c.grid_size);
+        registry.pending_drag_pos.set(Some(canvas_pos));
 
-        registry.drag_state.with_untracked(|ds| {
-            if let Some(ds) = ds {
-                let delta = Position::new(
-                    canvas_pos.x - ds.offset.x,
-                    canvas_pos.y - ds.offset.y,
-                );
-
-                for (node_id, start_pos) in &ds.start_positions {
-                    let mut new_pos = Position::new(
-                        start_pos.x + delta.x,
-                        start_pos.y + delta.y,
-                    );
-                    if let Some(grid) = grid_size {
-                        new_pos = utils::snap_to_grid(new_pos, grid);
-                    }
-                    registry.set_node_position_with_signal(node_id, new_pos);
+        if !registry.drag_raf_pending.get_untracked() {
+            registry.drag_raf_pending.set(true);
+            let reg = registry.clone();
+            crate::raf::request_animation_frame(move || {
+                reg.drag_raf_pending.set(false);
+                let canvas_pos = reg.pending_drag_pos.get_untracked();
+                if let Some(canvas_pos) = canvas_pos {
+                    reg.pending_drag_pos.set(None);
+                    let grid_size = reg.config.with_untracked(|c| c.grid_size);
+                    reg.drag_state.with_untracked(|ds| {
+                        if let Some(ds) = ds {
+                            let delta = Position::new(
+                                canvas_pos.x - ds.offset.x,
+                                canvas_pos.y - ds.offset.y,
+                            );
+                            let updates: Vec<(N, Position)> = ds.start_positions.iter().map(|(node_id, start_pos)| {
+                                let mut new_pos = Position::new(
+                                    start_pos.x + delta.x,
+                                    start_pos.y + delta.y,
+                                );
+                                if let Some(grid) = grid_size {
+                                    new_pos = utils::snap_to_grid(new_pos, grid);
+                                }
+                                (node_id.clone(), new_pos)
+                            }).collect();
+                            reg.batch_set_positions(&updates);
+                        }
+                    });
                 }
-            }
-        });
+            });
+        }
         return;
     }
 
@@ -190,6 +202,7 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
                 });
             }
         }
+
     }
 
     // Cancel draft connection only if mouseup was NOT on an anchor or the node menu

@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use leptos::prelude::*;
 
 use crate::registry::EditorRegistry;
+use crate::theme::GroupStyle;
 use crate::types::*;
 
 /// Defines a visual group box around a set of nodes.
@@ -202,12 +203,13 @@ where
                     height: bounds.height + label_height,
                 };
 
-                let color = group.color.clone().unwrap_or_else(|| "#8b5cf6".into());
+                let gs = use_context::<GroupStyle>().unwrap_or_default();
+                let color = group.color.clone().unwrap_or_else(|| gs.default_color.clone());
                 let is_error = group.error;
                 let is_hovered = hovered.as_ref() == Some(&group.id);
 
                 let (border_color, bg_color) = if is_error {
-                    ("rgba(239, 68, 68, 0.5)".to_string(), "rgba(239, 68, 68, 0.08)".to_string())
+                    (gs.error_border.clone(), gs.error_background.clone())
                 } else if is_hovered {
                     (format!("color-mix(in srgb, {color} 80%, transparent)"),
                      format!("color-mix(in srgb, {color} 20%, transparent)"))
@@ -222,8 +224,9 @@ where
                     "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
                      pointer-events: none; z-index: 0; \
                      background: {bg_color}; border: 1px {border_style} {border_color}; \
-                     border-radius: 8px; transition: background 0.15s, border 0.15s;",
+                     border-radius: {}; transition: background 0.15s, border 0.15s;",
                     final_bounds.x, final_bounds.y, final_bounds.width, final_bounds.height,
+                    gs.border_radius,
                 );
 
                 let header_view = if let Some(ref header_cb) = header {
@@ -231,7 +234,7 @@ where
                 } else {
                     group.label.clone().map(|label| {
                         let label_color = if is_error {
-                            "rgba(239, 68, 68, 0.8)".to_string()
+                            gs.error_label_color.clone()
                         } else {
                             format!("color-mix(in srgb, {color} 70%, white)")
                         };
@@ -272,20 +275,24 @@ fn GroupLabel<N: NodeId>(
     let (text, set_text) = signal(label.clone());
     let input_ref = NodeRef::<leptos::html::Input>::new();
 
+    let gs = use_context::<GroupStyle>().unwrap_or_default();
+
     let label_style = format!(
         "position: absolute; top: 6px; left: 10px; \
-         font-size: 10px; font-weight: 600; text-transform: uppercase; \
+         font-size: {}; font-weight: {}; text-transform: uppercase; \
          letter-spacing: 0.05em; color: {color}; \
-         pointer-events: auto; cursor: default;"
+         pointer-events: auto; cursor: default;",
+        gs.label_font_size, gs.label_font_weight
     );
 
     let input_style = format!(
         "position: absolute; top: 4px; left: 8px; \
          font-size: 10px; font-weight: 600; text-transform: uppercase; \
          letter-spacing: 0.05em; color: {color}; \
-         background: transparent; border: 1px solid {color}; \
+         background: {}; border: 1px solid {color}; \
          border-radius: 3px; padding: 1px 4px; outline: none; \
-         pointer-events: auto;"
+         pointer-events: auto;",
+        gs.input_background
     );
 
     let group_id_commit = group_id.clone();

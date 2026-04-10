@@ -115,12 +115,35 @@ where
         reg_cleanup.deregister_port(&id_cleanup);
     });
 
-    // Update port position when node position changes
+    // Update port position when node position changes.
+    // First frame: DOM measurement to compute offset, stored in registry.
+    // Subsequent frames: batch_set_positions uses the stored offset (no Effect needed).
     let reg_pos = registry.clone();
     let id_pos = id.clone();
+    let measured = std::cell::Cell::new(false);
     Effect::new(move || {
-        let _pos = node_ctx.position.get();
+        let node_pos = node_ctx.position.get();
 
+        if measured.get() {
+            // After first measurement, batch_set_positions handles port updates.
+            // This Effect only needs to run for non-drag position changes
+            // (e.g. consumer setting position signal directly).
+            let is_dragging = reg_pos.drag_state.with_untracked(|ds| ds.is_some());
+            if is_dragging {
+                return; // batch_set_positions already handled this
+            }
+            // Non-drag position change: use stored offset
+            let offset = reg_pos.ports.with_untracked(|ports| {
+                ports.get(&id_pos).and_then(|p| p.offset)
+            });
+            if let Some(offset) = offset {
+                let canvas_pos = Position::new(node_pos.x + offset.x, node_pos.y + offset.y);
+                reg_pos.set_port_position(&id_pos, canvas_pos);
+            }
+            return;
+        }
+
+        // First measurement: get offset from DOM
         if let Some(dot_el) = dot_ref.get() {
             let container_rect = dot_el
                 .closest(".node-editor")
@@ -139,6 +162,14 @@ where
 
                 let canvas_pos = viewport.screen_to_canvas(Position::new(screen_x, screen_y));
                 reg_pos.set_port_position(&id_pos, canvas_pos);
+
+                // Store offset in registry for batch_set_positions to use
+                let offset = Position::new(
+                    canvas_pos.x - node_pos.x,
+                    canvas_pos.y - node_pos.y,
+                );
+                reg_pos.set_port_offset(&id_pos, offset);
+                measured.set(true);
             }
         }
     });

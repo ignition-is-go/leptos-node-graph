@@ -10,6 +10,8 @@ pub mod history;
 pub mod layout;
 pub mod group;
 pub mod menu;
+pub mod raf;
+pub mod theme;
 pub mod utils;
 
 pub use types::*;
@@ -20,6 +22,7 @@ pub use connection::ConnectionStyle;
 pub use selection::SelectionBoxStyle;
 pub use group::{GroupBoxOverlay, GroupBox, GroupBounds, GroupEvent};
 pub use menu::{NodeMenu, NodeMenuItem, NodeMenuEvent, NodeMenuContext, MenuPort, DraftContext};
+pub use theme::{NodeMenuStyle, GroupStyle};
 pub use layout::{LayoutEngine, LayoutGraph};
 pub use history::UndoHistory;
 pub use registry::{EditorRegistry, ConnectionEntry};

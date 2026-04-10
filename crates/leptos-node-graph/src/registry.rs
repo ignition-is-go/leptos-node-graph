@@ -22,6 +22,10 @@ pub struct PortEntry<N: NodeId, P: PortId, T: PortType> {
     pub direction: PortDirection,
     pub port_type: T,
     pub position: Position,
+    /// Index of this port among its node's ports of the same direction.
+    pub slot_index: usize,
+    /// Cached offset from node position. Set by the anchor's first DOM measurement.
+    pub offset: Option<Position>,
 }
 
 /// A connection between two ports.
@@ -80,6 +84,10 @@ where
     pub on_event: StoredValue<Callback<GraphEvent<N, P, C>>>,
     pub box_select: RwSignal<Option<BoxSelect>>,
     pub drag_state: RwSignal<Option<DragState<N>>>,
+    /// Pending drag canvas position — written by mousemove, applied by RAF.
+    pub pending_drag_pos: RwSignal<Option<Position>>,
+    /// Whether a RAF callback is already scheduled for drag.
+    pub drag_raf_pending: RwSignal<bool>,
 }
 
 impl<N, P, C, T> EditorRegistry<N, P, C, T>
@@ -103,6 +111,8 @@ where
             on_event: StoredValue::new(on_event),
             box_select: RwSignal::new(None),
             drag_state: RwSignal::new(None),
+            pending_drag_pos: RwSignal::new(None),
+            drag_raf_pending: RwSignal::new(false),
         }
     }
 
@@ -161,6 +171,10 @@ where
         position: Position,
     ) {
         self.ports.update(|ports| {
+            // Count existing ports on this node with the same direction to get the slot index
+            let slot_index = ports.values()
+                .filter(|p| p.node_id == node_id && p.direction == direction)
+                .count();
             ports.insert(
                 id.clone(),
                 PortEntry {
@@ -169,6 +183,8 @@ where
                     direction,
                     port_type,
                     position,
+                    slot_index,
+                    offset: None,
                 },
             );
         });
@@ -225,6 +241,43 @@ where
         }
     }
 
+    /// Batch-update positions for multiple nodes during drag.
+    /// Updates node entries, port positions (via cached offsets), and position signals.
+    /// Minimizes reactive notifications: 1 nodes update + 1 ports update + N signal sets.
+    pub fn batch_set_positions(&self, updates: &[(N, Position)]) {
+        // 1. Update node entries, collect position signals
+        let node_signals: Vec<(RwSignal<Position>, Position)> = self.nodes.try_update(|nodes| {
+            updates.iter().filter_map(|(id, pos)| {
+                if let Some(entry) = nodes.get_mut(id) {
+                    entry.position = *pos;
+                    entry.position_signal.map(|sig| (sig, *pos))
+                } else {
+                    None
+                }
+            }).collect()
+        }).unwrap_or_default();
+
+        // 2. Batch-update port positions using cached offsets (one ports.update)
+        let update_map: HashMap<&N, &Position> = updates.iter().map(|(id, pos)| (id, pos)).collect();
+        self.ports.update(|ports| {
+            for entry in ports.values_mut() {
+                if let Some(new_node_pos) = update_map.get(&entry.node_id) {
+                    if let Some(offset) = entry.offset {
+                        entry.position = Position::new(
+                            new_node_pos.x + offset.x,
+                            new_node_pos.y + offset.y,
+                        );
+                    }
+                }
+            }
+        });
+
+        // 3. Set position signals (drives CSS node positioning via style=)
+        for (sig, pos) in node_signals {
+            sig.set(pos);
+        }
+    }
+
     /// Update a node's size.
     pub fn set_node_size(&self, id: &N, size: Size) {
         self.nodes.update(|nodes| {
@@ -241,6 +294,14 @@ where
                 entry.position = position;
             }
         });
+    }
+
+    /// Set a port's cached offset from its node position.
+    pub fn set_port_offset(&self, id: &P, offset: Position) {
+        let mut guard = self.ports.write_untracked();
+        if let Some(entry) = guard.get_mut(id) {
+            entry.offset = Some(offset);
+        }
     }
 
     /// Replace the entire connections map (used by the consumer to sync state).

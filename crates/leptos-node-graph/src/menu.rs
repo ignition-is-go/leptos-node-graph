@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use leptos_use::use_event_listener;
 
+use crate::theme::NodeMenuStyle;
 use crate::types::*;
 
 /// A port definition on a menu item.
@@ -76,6 +77,7 @@ pub fn NodeMenu(
 {
     provide_context(NodeMenuContext { open_at });
 
+    let ms = use_context::<NodeMenuStyle>().unwrap_or_default();
     let input_ref = NodeRef::<leptos::html::Input>::new();
     let (selected_index, set_selected_index) = signal(0usize);
     let (hovered_port, set_hovered_port) = signal(Option::<(usize, String)>::None);
@@ -198,20 +200,27 @@ pub fn NodeMenu(
         let dc = draft_context.get();
         let hp = hovered_port.get();
 
+        let panel_style = format!(
+            "background: {}; border: {}; border-radius: 8px; box-shadow: {}; \
+             min-width: 220px; max-height: 360px; display: flex; flex-direction: column; overflow: hidden;",
+            ms.background, ms.border, ms.shadow
+        );
+        let search_wrapper_style = format!("padding: 8px; border-bottom: {};", ms.divider);
+        let input_style = format!(
+            "width: 100%; background: {}; border: {}; border-radius: 4px; color: {}; \
+             font-size: 12px; padding: 6px 8px; outline: none; box-sizing: border-box;",
+            ms.input_background, ms.input_border, ms.input_color
+        );
+
         Some(view! {
             <div style=menu_style data-node-menu="">
-                <div style="background: #1e1e22; border: 1px solid #3f3f46; border-radius: 8px; \
-                            box-shadow: 0 8px 24px rgba(0,0,0,0.5); min-width: 220px; \
-                            max-height: 360px; display: flex; flex-direction: column; \
-                            overflow: hidden;">
-                    <div style="padding: 8px; border-bottom: 1px solid #27272a;">
+                <div style=panel_style>
+                    <div style=search_wrapper_style>
                         <input
                             node_ref=input_ref
                             type="text"
                             placeholder="Search nodes..."
-                            style="width: 100%; background: #27272a; border: 1px solid #3f3f46; \
-                                   border-radius: 4px; color: #d4d4d8; font-size: 12px; \
-                                   padding: 6px 8px; outline: none; box-sizing: border-box;"
+                            style=input_style
                             prop:value=move || search_text.get()
                             on:input=move |ev| {
                                 use leptos::wasm_bindgen::JsCast;
@@ -226,8 +235,10 @@ pub fn NodeMenu(
                     <div style="overflow-y: auto; padding: 4px 0;">
                         {if current_items.is_empty() {
                             view! {
-                                <div style="padding: 12px 16px; color: #71717a; font-size: 12px; \
-                                            text-align: center;">
+                                <div style=format!(
+                                    "padding: 12px 16px; color: {}; font-size: 12px; text-align: center;",
+                                    ms.empty_color
+                                )>
                                     "No matching nodes"
                                 </div>
                             }.into_any()
@@ -246,9 +257,11 @@ pub fn NodeMenu(
                                         last_category.clone_from(&item.category);
                                         item.category.clone().map(|cat| {
                                             view! {
-                                                <div style="padding: 4px 12px 2px; font-size: 9px; \
-                                                            font-weight: 600; text-transform: uppercase; \
-                                                            letter-spacing: 0.05em; color: #52525b;">
+                                                <div style=format!(
+                                                    "padding: 4px 12px 2px; font-size: 9px; font-weight: 600; \
+                                                     text-transform: uppercase; letter-spacing: 0.05em; color: {};",
+                                                    ms.category_color
+                                                )>
                                                     {cat}
                                                 </div>
                                             }
@@ -267,14 +280,14 @@ pub fn NodeMenu(
                                         })
                                     }).count() > 1;
                                     let item_bg = if is_selected && !has_visible_ports {
-                                        "background: rgba(99, 102, 241, 0.15);"
+                                        format!("background: {};", ms.hover_background)
                                     } else {
-                                        ""
+                                        String::new()
                                     };
 
                                     let item_style = format!(
                                         "padding: 6px 12px; cursor: pointer; font-size: 12px; \
-                                         color: #d4d4d8; {item_bg}"
+                                         color: {}; {item_bg}", ms.item_color
                                     );
 
                                     let desc = item.description.clone();
@@ -327,13 +340,13 @@ pub fn NodeMenu(
                                             let hover_key = (i, pid.clone());
                                             let is_port_hovered = hp.as_ref() == Some(&hover_key);
                                             let port_bg = if is_port_hovered {
-                                                "background: rgba(99, 102, 241, 0.15);"
+                                                format!("background: {};", ms.hover_background)
                                             } else {
-                                                ""
+                                                String::new()
                                             };
                                             let port_style = format!(
                                                 "padding: 3px 4px 3px 20px; cursor: pointer; \
-                                                 font-size: 11px; color: #a1a1aa; {port_bg}"
+                                                 font-size: 11px; color: {}; {port_bg}", ms.port_color
                                             );
                                             view! {
                                                 <div
@@ -374,7 +387,7 @@ pub fn NodeMenu(
                                         >
                                             {item.label}
                                             {desc.map(|d| view! {
-                                                <div style="font-size: 10px; color: #71717a; margin-top: 2px;">
+                                                <div style=format!("font-size: 10px; color: {}; margin-top: 2px;", ms.description_color)>
                                                     {d}
                                                 </div>
                                             })}
