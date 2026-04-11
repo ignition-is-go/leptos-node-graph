@@ -24,16 +24,60 @@ pub fn build_node_registry() -> NodeTypeRegistry {
 
     for item in catalog {
         let type_id = item.id.clone();
-        reg.register(NodeTypeDef::new(item, move |id, pos| {
-            match type_id.as_str() {
-                "color_source" => view! { <ColorSourceNode id=id position=pos /> }.into_any(),
-                "mix" => view! { <MixNode id=id position=pos /> }.into_any(),
-                "math" => view! { <MathNode id=id position=pos /> }.into_any(),
-                "output" => view! { <OutputNode id=id position=pos /> }.into_any(),
-                "custom" => view! { <CustomNode id=id position=pos /> }.into_any(),
-                _ => view! { <div>"Unknown"</div> }.into_any(),
+        match type_id.as_str() {
+            // Color Source: simple, no body, no port overrides
+            "color_source" => {
+                reg.register(
+                    NodeTypeBuilder::<super::DemoPort>::new(item).build()
+                );
             }
-        }));
+            // Mix: body with blend dropdown, factor port has NumberInput
+            "mix" => {
+                reg.register(
+                    NodeTypeBuilder::<super::DemoPort>::new(item)
+                        .body(|| view! {
+                            <NodeField label="Blend">
+                                <Select options=vec!["Normal", "Multiply", "Screen", "Overlay", "Add"] />
+                            </NodeField>
+                        }.into_any())
+                        .port_slot("factor", || view! {
+                            <NumberInput label="Factor" initial="0.5" />
+                        }.into_any())
+                        .build()
+                );
+            }
+            // Math: A and B inputs have NumberInput
+            "math" => {
+                reg.register(
+                    NodeTypeBuilder::<super::DemoPort>::new(item)
+                        .port_slot("a", || view! { <NumberInput label="A" /> }.into_any())
+                        .port_slot("b", || view! { <NumberInput label="B" /> }.into_any())
+                        .build()
+                );
+            }
+            // Output: simple, no body, no port overrides
+            "output" => {
+                reg.register(
+                    NodeTypeBuilder::<super::DemoPort>::new(item).build()
+                );
+            }
+            // Custom: dynamic ports — needs full custom renderer
+            "custom" => {
+                reg.register(
+                    NodeTypeBuilder::<super::DemoPort>::new(item)
+                        .custom_renderer(|id, pos| {
+                            view! { <CustomNode id=id position=pos /> }.into_any()
+                        })
+                        .build()
+                );
+            }
+            _ => {
+                // Default: auto-render from menu item definition
+                reg.register(
+                    NodeTypeBuilder::<super::DemoPort>::new(item).build()
+                );
+            }
+        }
     }
 
     reg
@@ -100,12 +144,10 @@ fn Select(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Node components
-// ---------------------------------------------------------------------------
+// Only CustomNode needs a manual component — all others are auto-rendered.
 
 #[component]
-fn ColorSourceNode(id: String, position: RwSignal<Position>) -> impl IntoView {
+fn _Unused(id: String, position: RwSignal<Position>) -> impl IntoView {
     let p = |name: &str| format!("{id}_{name}");
     let color_id = p("color");
     let alpha_id = p("alpha");

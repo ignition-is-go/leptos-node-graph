@@ -4,7 +4,7 @@ use leptos_use::use_event_listener;
 use crate::theme::NodeMenuStyle;
 use crate::types::*;
 
-/// A port definition on a menu item.
+/// A port definition on a menu item (type-erased for menu display/filtering).
 #[derive(Clone, Debug)]
 pub struct MenuPort {
     /// Port identifier (used in the CreateNode event).
@@ -13,11 +13,11 @@ pub struct MenuPort {
     pub label: String,
     /// Port direction.
     pub direction: PortDirection,
-    /// Type identifier for compatibility checking (matched against draft port type).
+    /// Type identifier string for compatibility checking.
     pub type_id: String,
 }
 
-/// A menu item representing a node type that can be created.
+/// A menu item representing a node type that can be created (type-erased).
 #[derive(Clone, Debug)]
 pub struct NodeMenuItem {
     /// Unique identifier for this node type.
@@ -30,6 +30,59 @@ pub struct NodeMenuItem {
     pub description: Option<String>,
     /// Ports this node type has.
     pub ports: Vec<MenuPort>,
+}
+
+/// Typed port definition for use with the builder API.
+/// Converts to `MenuPort` automatically.
+#[derive(Clone, Debug)]
+pub struct TypedPort<T: PortType> {
+    pub id: String,
+    pub label: String,
+    pub direction: PortDirection,
+    pub port_type: T,
+}
+
+impl<T: PortType> TypedPort<T> {
+    pub fn input(id: impl Into<String>, label: impl Into<String>, port_type: T) -> Self {
+        Self { id: id.into(), label: label.into(), direction: PortDirection::Input, port_type }
+    }
+
+    pub fn output(id: impl Into<String>, label: impl Into<String>, port_type: T) -> Self {
+        Self { id: id.into(), label: label.into(), direction: PortDirection::Output, port_type }
+    }
+
+    /// Convert to a type-erased MenuPort for the menu UI.
+    pub fn to_menu_port(&self) -> MenuPort {
+        MenuPort {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            direction: self.direction,
+            type_id: self.port_type.type_id(),
+        }
+    }
+}
+
+/// Typed node definition for use with the builder API.
+/// Converts to `NodeMenuItem` automatically.
+pub struct TypedNodeDef<T: PortType> {
+    pub id: String,
+    pub label: String,
+    pub category: Option<String>,
+    pub description: Option<String>,
+    pub ports: Vec<TypedPort<T>>,
+}
+
+impl<T: PortType> TypedNodeDef<T> {
+    /// Convert to a type-erased NodeMenuItem for the menu UI.
+    pub fn to_menu_item(&self) -> NodeMenuItem {
+        NodeMenuItem {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            category: self.category.clone(),
+            description: self.description.clone(),
+            ports: self.ports.iter().map(|p| p.to_menu_port()).collect(),
+        }
+    }
 }
 
 /// Events emitted by the node menu.
