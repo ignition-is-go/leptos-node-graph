@@ -177,15 +177,18 @@ where
         position: Position,
     ) {
         self.ports.update(|ports| {
-            // Recalculate slot indices for all ports on this node+direction
-            let mut idx = 0;
+            // New port gets the next index for this node+direction
+            let next_idx = ports.values()
+                .filter(|p| p.node_id == node_id && p.direction == direction)
+                .count();
+
+            // Invalidate offsets for existing sibling ports (positions may shift)
             for entry in ports.values_mut() {
-                if entry.node_id == node_id && entry.direction == direction {
-                    entry.slot_index = idx;
-                    entry.offset = None; // invalidate cached offset
-                    idx += 1;
+                if entry.node_id == node_id {
+                    entry.offset = None;
                 }
             }
+
             ports.insert(
                 id.clone(),
                 PortEntry {
@@ -194,7 +197,7 @@ where
                     direction,
                     port_type,
                     position,
-                    slot_index: idx,
+                    slot_index: next_idx,
                     offset: None,
                 },
             );
@@ -213,14 +216,18 @@ where
         self.ports.update(|ports| {
             ports.remove(id);
 
-            // Reindex and invalidate remaining sibling ports
+            // Reindex siblings preserving their original order
             if let Some((node_id, direction)) = &port_info {
-                let mut idx = 0;
-                for entry in ports.values_mut() {
-                    if &entry.node_id == node_id && entry.direction == *direction {
-                        entry.slot_index = idx;
+                let mut siblings: Vec<(usize, P)> = ports.values()
+                    .filter(|p| &p.node_id == node_id && p.direction == *direction)
+                    .map(|p| (p.slot_index, p.id.clone()))
+                    .collect();
+                siblings.sort_by_key(|(idx, _)| *idx);
+
+                for (new_idx, (_, port_id)) in siblings.into_iter().enumerate() {
+                    if let Some(entry) = ports.get_mut(&port_id) {
+                        entry.slot_index = new_idx;
                         entry.offset = None;
-                        idx += 1;
                     }
                 }
             }

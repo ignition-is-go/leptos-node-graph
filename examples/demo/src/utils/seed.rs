@@ -25,6 +25,13 @@ pub fn generate_demo_graph(
         let row = i / cols;
         let node_type = types[i % types.len()];
         let id = format!("{}_{}", node_type, i);
+        let cat_name = match node_type {
+            "color_source" => "Input",
+            "mix" => "Color",
+            "math" => "Math",
+            "output" => "Output",
+            _ => "Utility",
+        };
         nodes.push(DynNode {
             id,
             node_type: node_type.into(),
@@ -32,6 +39,7 @@ pub fn generate_demo_graph(
                 col as f64 * col_spacing + 50.0,
                 row as f64 * row_spacing + 50.0,
             )),
+            category: crate::Category { name: cat_name.into(), color: "#71717a".into() },
         });
     }
 

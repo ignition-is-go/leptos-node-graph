@@ -32,8 +32,10 @@ pub fn Node<N, P, C, T>(
     /// Body content (dropdowns, controls, etc.) between header and ports.
     /// Library measures its height.
     #[prop(optional)] body: Option<Children>,
-    /// Port anchors — library lays these out in two columns.
-    children: Children,
+    /// Input port anchors (left column).
+    #[prop(optional)] inputs: Option<Children>,
+    /// Output port anchors (right column).
+    #[prop(optional)] outputs: Option<Children>,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -47,11 +49,17 @@ where
     let body_ref = NodeRef::<leptos::html::Div>::new();
 
     // Measure header + body heights
-    let UseElementSizeReturn { width: _header_w, height: header_h } = use_element_size(header_ref);
-    let UseElementSizeReturn { width: _body_w, height: body_h } = use_element_size(body_ref);
     let UseElementSizeReturn { width: node_w, height: node_h } = use_element_size(node_ref);
+    let ports_ref = NodeRef::<leptos::html::Div>::new();
 
-    let ports_y_offset = Signal::derive(move || header_h.get() + body_h.get());
+    // Measure ports div offset from node top — exact, no padding math needed.
+    // Re-derives when node height changes (triggered by header/body resize).
+    let ports_y_offset = Signal::derive(move || {
+        let _nh = node_h.get(); // track node size changes to re-derive
+        ports_ref.with(|el| {
+            el.as_ref().map(|e| e.offset_top() as f64).unwrap_or(0.0)
+        })
+    });
     let node_width = Signal::derive(move || node_w.get());
 
     // Derived state signals
@@ -199,14 +207,64 @@ where
         },
     );
 
+    let ns = use_context::<crate::theme::NodeStyle>().unwrap_or_default();
+    let ns2 = ns.clone();
     let node_style = move || {
         let pos = position.get();
-        format!("position: absolute; left: {}px; top: {}px;", pos.x, pos.y)
+        let selected = is_selected.get();
+        let dragging = is_dragging.get();
+
+        let outline = if selected { format!("outline: {};", ns.outline_selected) } else { String::new() };
+        let shadow = if selected { &ns.shadow_selected } else { &ns.shadow };
+        let opacity = if dragging { ns.opacity_dragging } else { 1.0 };
+
+        format!(
+            "position: absolute; left: {}px; top: {}px; \
+             background: {}; border: {}; border-radius: {}; \
+             min-width: {}; box-shadow: {shadow}; user-select: none; \
+             opacity: {opacity}; overflow: hidden; {outline}",
+            pos.x, pos.y, ns.background, ns.border, ns.border_radius, ns.min_width,
+        )
     };
 
     // Render header and body slots
     let header_view = header.map(|h| h());
+    let inputs_view = inputs.map(|i| i());
+    let outputs_view = outputs.map(|o| o());
+
+    let px = ns2.padding_x;
+    let header_style = format!(
+        "padding: {}px {}px; border-bottom: {}; background: {}; \
+         font-size: {}; font-weight: 600; letter-spacing: 0.03em; \
+         text-transform: uppercase; color: {};",
+        ns2.header_padding_y, px, ns2.header_border_bottom,
+        ns2.header_background,
+        ns2.header_font_size, ns2.header_color,
+    );
+    let has_body = body.is_some();
     let body_view = body.map(|b| b());
+    let body_style = if has_body {
+        format!(
+            "padding: {}px {}px; border-bottom: {};",
+            ns2.body_padding_y, px, ns2.body_border_bottom,
+        )
+    } else {
+        String::new()
+    };
+    let ports_style = format!(
+        "display: flex; justify-content: space-between; padding: {}px 0;",
+        ns2.ports_padding_y,
+    );
+
+    let accent_view = if !ns2.header_accent_color.is_empty() {
+        let accent_style = format!(
+            "height: {}px; background: {}; flex-shrink: 0;",
+            ns2.header_accent_height, ns2.header_accent_color,
+        );
+        Some(view! { <div style=accent_style /> })
+    } else {
+        None
+    };
 
     view! {
         <div
@@ -214,15 +272,43 @@ where
             node_ref=node_ref
             data-node=""
         >
-            <div node_ref=header_ref data-node-header="">
+            {accent_view}
+            <div node_ref=header_ref data-node-header="" style=header_style>
                 {header_view}
             </div>
-            <div node_ref=body_ref data-node-body="">
+            <div node_ref=body_ref data-node-body="" style=body_style>
                 {body_view}
             </div>
-            <div data-node-ports="" style="display: flex; justify-content: space-between;">
-                {children()}
+            <div node_ref=ports_ref data-node-ports="" style=ports_style>
+                <div data-node-inputs="" style="display: flex; flex-direction: column;">
+                    {inputs_view}
+                </div>
+                <div data-node-outputs="" style="display: flex; flex-direction: column; align-items: flex-end;">
+                    {outputs_view}
+                </div>
             </div>
+        </div>
+    }
+}
+
+/// A labeled field row for use inside the node body slot.
+/// Renders label + children in a flex row, styled from `NodeStyle`.
+#[component]
+pub fn NodeField(#[prop(into)] label: String, children: Children) -> impl IntoView {
+    let ns = use_context::<crate::theme::NodeStyle>().unwrap_or_default();
+    let label_style = format!(
+        "font-size: {}; color: {}; text-transform: uppercase; \
+         letter-spacing: 0.04em; min-width: {};",
+        ns.field_label_font_size, ns.field_label_color, ns.field_label_min_width,
+    );
+    let row_style = format!(
+        "display: flex; align-items: center; gap: {};",
+        ns.field_gap,
+    );
+    view! {
+        <div style=row_style>
+            <label style=label_style>{label}</label>
+            {children()}
         </div>
     }
 }

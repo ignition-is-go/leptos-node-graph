@@ -152,8 +152,10 @@ where
     let reg_pos = registry.clone();
     let id_pos = id.clone();
     let anchor_style = use_context::<crate::theme::AnchorStyle>().unwrap_or_default();
+    let node_style = use_context::<crate::theme::NodeStyle>().unwrap_or_default();
     let row_h = anchor_style.row_height;
     let dot_inset = anchor_style.dot_inset;
+    let ports_pad_top = node_style.ports_padding_y;
 
     Effect::new(move || {
         let node_pos = node_ctx.position.get();
@@ -170,7 +172,7 @@ where
             return; // batch_set_positions handles this
         }
 
-        let y = node_pos.y + ports_y + (slot_idx as f64 * row_h) + (row_h / 2.0);
+        let y = node_pos.y + ports_y + ports_pad_top + (slot_idx as f64 * row_h) + (row_h / 2.0);
         let x = match direction {
             PortDirection::Input => node_pos.x + dot_inset,
             PortDirection::Output => node_pos.x + nw - dot_inset,
@@ -580,26 +582,31 @@ where
         )
     };
 
-    // Tooltip
+    // Tooltip — uses fixed positioning to escape node's overflow:hidden
     let (dot_hovered, set_dot_hovered) = signal(false);
-    let tooltip_style = use_context::<crate::theme::AnchorStyle>().unwrap_or_default();
+    let (mouse_pos, set_mouse_pos) = signal(Position::new(0.0, 0.0));
+    let tooltip_style_cfg = use_context::<crate::theme::AnchorStyle>().unwrap_or_default();
     let tooltip_view = move || {
         if !dot_hovered.get() {
             return None;
         }
-        let align = if is_output {
-            "right: 100%; margin-right: 6px;"
+        let mp = mouse_pos.get();
+        // For output dots, tooltip appears to the left; for input, to the right
+        let offset_x = if is_output { -12.0 } else { 12.0 };
+        let transform = if is_output {
+            "transform: translate(-100%, -50%);"
         } else {
-            "left: 100%; margin-left: 6px;"
+            "transform: translateY(-50%);"
         };
         let style = format!(
-            "position: absolute; top: 50%; transform: translateY(-50%); {align} \
+            "position: fixed; left: {}px; top: {}px; {transform} \
              background: {}; border: {}; border-radius: 4px; \
              padding: 2px 6px; font-size: 10px; color: {}; white-space: nowrap; \
-             pointer-events: none; z-index: 100;",
-            tooltip_style.tooltip_background,
-            tooltip_style.tooltip_border,
-            tooltip_style.tooltip_color,
+             pointer-events: none; z-index: 10000;",
+            mp.x + offset_x, mp.y,
+            tooltip_style_cfg.tooltip_background,
+            tooltip_style_cfg.tooltip_border,
+            tooltip_style_cfg.tooltip_color,
         );
         Some(view! { <div style=style>{type_label2.clone()}</div> })
     };
@@ -662,15 +669,18 @@ where
             style=row_style
         >
             <div
-                style="position: relative; display: inline-flex;"
-                on:mouseenter=move |_| set_dot_hovered.set(true)
+                style="display: inline-flex;"
+                on:mouseenter=move |ev: web_sys::MouseEvent| {
+                    set_dot_hovered.set(true);
+                    set_mouse_pos.set(Position::new(ev.client_x() as f64, ev.client_y() as f64));
+                }
                 on:mouseleave=move |_| set_dot_hovered.set(false)
             >
                 <div style=dot_style node_ref=dot_ref data-anchor-dot="" />
-                {tooltip_view}
             </div>
             {label_or_children}
         </div>
+        {tooltip_view}
         {ctx_menu_view}
     }
 }

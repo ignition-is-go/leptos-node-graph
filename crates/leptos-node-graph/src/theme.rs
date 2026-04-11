@@ -1,3 +1,77 @@
+/// Style configuration for node cards.
+#[derive(Clone, Debug)]
+pub struct NodeStyle {
+    pub background: String,
+    pub border: String,
+    /// Selection outline (uses CSS outline, not border — no layout shift).
+    pub outline_selected: String,
+    pub border_radius: String,
+    pub shadow: String,
+    pub shadow_selected: String,
+    pub min_width: String,
+    pub opacity_dragging: f64,
+    /// Horizontal padding applied to all sections (header, body, ports).
+    pub padding_x: f64,
+    /// Vertical padding for the header section.
+    pub header_padding_y: f64,
+    /// Vertical padding for the body section (0 if no body).
+    pub body_padding_y: f64,
+    /// Vertical padding for the ports section.
+    pub ports_padding_y: f64,
+    /// Border between header and body/ports.
+    pub header_border_bottom: String,
+    /// Background for the header section.
+    pub header_background: String,
+    /// Header text color.
+    pub header_color: String,
+    /// Header font size.
+    pub header_font_size: String,
+    /// Accent color along the top edge of the node. Empty string = no accent.
+    pub header_accent_color: String,
+    /// Accent line height in pixels.
+    pub header_accent_height: f64,
+    /// Body field label color.
+    pub field_label_color: String,
+    /// Body field label font size.
+    pub field_label_font_size: String,
+    /// Body field gap between label and content.
+    pub field_gap: String,
+    /// Body field label min width.
+    pub field_label_min_width: String,
+    /// Body border bottom (between body and ports).
+    pub body_border_bottom: String,
+}
+
+impl Default for NodeStyle {
+    fn default() -> Self {
+        Self {
+            background: "#1e1e22".into(),
+            border: "1px solid #3f3f46".into(),
+            outline_selected: "1.5px solid #ef4444".into(),
+            border_radius: "8px".into(),
+            shadow: "0 4px 12px rgba(0,0,0,0.4)".into(),
+            shadow_selected: "0 0 0 1px #ef4444, 0 4px 16px rgba(239,68,68,0.25)".into(),
+            min_width: "160px".into(),
+            opacity_dragging: 0.92,
+            padding_x: 10.0,
+            header_padding_y: 6.0,
+            body_padding_y: 6.0,
+            ports_padding_y: 4.0,
+            header_border_bottom: "1px solid #27272a".into(),
+            header_background: "#232327".into(),
+            header_color: "#a1a1aa".into(),
+            header_font_size: "12px".into(),
+            header_accent_color: String::new(),
+            header_accent_height: 2.0,
+            field_label_color: "#71717a".into(),
+            field_label_font_size: "10px".into(),
+            field_gap: "6px".into(),
+            field_label_min_width: "38px".into(),
+            body_border_bottom: "1px solid #27272a".into(),
+        }
+    }
+}
+
 /// Style configuration for the node creation menu.
 #[derive(Clone, Debug)]
 pub struct NodeMenuStyle {
