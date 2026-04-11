@@ -178,7 +178,7 @@ fn CustomNode(id: String, position: RwSignal<Position>) -> impl IntoView {
                     </NodeField>
                 </div>
             }.into_any())
-            inputs=Box::new(move || {
+            inputs=ViewFn::from(move || {
                 let n = num_inputs.get();
                 let id = id_in.clone();
                 (0..n).map(|i| {
@@ -188,7 +188,7 @@ fn CustomNode(id: String, position: RwSignal<Position>) -> impl IntoView {
                     }
                 }).collect_view().into_any()
             })
-            outputs=Box::new(move || {
+            outputs=ViewFn::from(move || {
                 let n = num_outputs.get();
                 let id = id_out.clone();
                 (0..n).map(|i| {

@@ -106,8 +106,8 @@ impl<T: PortType> NodeTypeBuilder<T> {
             let nid2 = nid.clone();
             let ps1 = port_slots.clone();
             let gs1 = global_slots.clone();
-            let inputs_view: Option<Children> = if inputs.is_empty() { None } else {
-                Some(Box::new(move || {
+            let inputs_fn = if inputs.is_empty() { ViewFn::default() } else {
+                ViewFn::from(move || {
                     inputs.iter().map(|port| {
                         let port_id = format!("{}_{}", nid, port.id);
                         let port_type = port.port_type.clone();
@@ -126,13 +126,13 @@ impl<T: PortType> NodeTypeBuilder<T> {
                             }.into_any()
                         }
                     }).collect_view().into_any()
-                }))
+                })
             };
 
             let ps2 = port_slots.clone();
             let gs2 = global_slots.clone();
-            let outputs_view: Option<Children> = if outputs.is_empty() { None } else {
-                Some(Box::new(move || {
+            let outputs_fn = if outputs.is_empty() { ViewFn::default() } else {
+                ViewFn::from(move || {
                     outputs.iter().map(|port| {
                         let port_id = format!("{}_{}", nid2, port.id);
                         let port_type = port.port_type.clone();
@@ -151,7 +151,7 @@ impl<T: PortType> NodeTypeBuilder<T> {
                             }.into_any()
                         }
                     }).collect_view().into_any()
-                }))
+                })
             };
 
             let header_content: Children = Box::new(move || {
@@ -162,9 +162,6 @@ impl<T: PortType> NodeTypeBuilder<T> {
                 Box::new(move || b()) as Children
             }).unwrap_or_else(|| Box::new(|| ().into_any()));
 
-            let inputs_final: Children = inputs_view.unwrap_or_else(|| Box::new(|| ().into_any()));
-            let outputs_final: Children = outputs_view.unwrap_or_else(|| Box::new(|| ().into_any()));
-
             let node_marker: PhantomData<(String, String, T)> = PhantomData;
 
             view! {
@@ -174,8 +171,8 @@ impl<T: PortType> NodeTypeBuilder<T> {
                     _marker=node_marker
                     header=header_content
                     body=body_content
-                    inputs=inputs_final
-                    outputs=outputs_final
+                    inputs=inputs_fn
+                    outputs=outputs_fn
                 />
             }.into_any()
         });

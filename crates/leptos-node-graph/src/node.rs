@@ -32,10 +32,10 @@ pub fn Node<N, P, C, T>(
     /// Body content (dropdowns, controls, etc.) between header and ports.
     /// Library measures its height.
     #[prop(optional)] body: Option<Children>,
-    /// Input port anchors (left column).
-    #[prop(optional)] inputs: Option<Children>,
-    /// Output port anchors (right column).
-    #[prop(optional)] outputs: Option<Children>,
+    /// Input port anchors (left column). Use ViewFn for reactive/dynamic ports.
+    #[prop(optional, into)] inputs: ViewFn,
+    /// Output port anchors (right column). Use ViewFn for reactive/dynamic ports.
+    #[prop(optional, into)] outputs: ViewFn,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -229,8 +229,7 @@ where
 
     // Render header and body slots
     let header_view = header.map(|h| h());
-    let inputs_view = inputs.map(|i| i());
-    let outputs_view = outputs.map(|o| o());
+    // ViewFn is Fn (not FnOnce) — wrapping in move || makes it reactive
 
     let px = ns2.padding_x;
     let header_style = format!(
@@ -281,10 +280,10 @@ where
             </div>
             <div node_ref=ports_ref data-node-ports="" style=ports_style>
                 <div data-node-inputs="" style="display: flex; flex-direction: column;">
-                    {inputs_view}
+                    {move || inputs.run()}
                 </div>
                 <div data-node-outputs="" style="display: flex; flex-direction: column; align-items: flex-end;">
-                    {outputs_view}
+                    {move || outputs.run()}
                 </div>
             </div>
         </div>
