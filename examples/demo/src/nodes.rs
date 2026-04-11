@@ -20,18 +20,20 @@ const ANCHOR_MARKER: AM = PhantomData;
 
 pub fn build_node_registry() -> NodeTypeRegistry {
     let mut reg = NodeTypeRegistry::new();
+
+    // Global: all Float inputs get a NumberInput
+    reg.register_port_type_slot(
+        super::DemoPort::Float,
+        PortDirection::Input,
+        |label| view! { <NumberInput label=label /> }.into_any(),
+    );
+
     let catalog = node_catalog();
 
     for item in catalog {
         let type_id = item.id.clone();
         match type_id.as_str() {
-            // Color Source: simple, no body, no port overrides
-            "color_source" => {
-                reg.register(
-                    NodeTypeBuilder::<super::DemoPort>::new(item).build()
-                );
-            }
-            // Mix: body with blend dropdown, factor port has NumberInput
+            // Mix: has a blend dropdown body
             "mix" => {
                 reg.register(
                     NodeTypeBuilder::<super::DemoPort>::new(item)
@@ -40,25 +42,7 @@ pub fn build_node_registry() -> NodeTypeRegistry {
                                 <Select options=vec!["Normal", "Multiply", "Screen", "Overlay", "Add"] />
                             </NodeField>
                         }.into_any())
-                        .port_slot("factor", || view! {
-                            <NumberInput label="Factor" initial="0.5" />
-                        }.into_any())
                         .build()
-                );
-            }
-            // Math: A and B inputs have NumberInput
-            "math" => {
-                reg.register(
-                    NodeTypeBuilder::<super::DemoPort>::new(item)
-                        .port_slot("a", || view! { <NumberInput label="A" /> }.into_any())
-                        .port_slot("b", || view! { <NumberInput label="B" /> }.into_any())
-                        .build()
-                );
-            }
-            // Output: simple, no body, no port overrides
-            "output" => {
-                reg.register(
-                    NodeTypeBuilder::<super::DemoPort>::new(item).build()
                 );
             }
             // Custom: dynamic ports — needs full custom renderer
@@ -71,8 +55,8 @@ pub fn build_node_registry() -> NodeTypeRegistry {
                         .build()
                 );
             }
+            // Everything else: auto-render from definition
             _ => {
-                // Default: auto-render from menu item definition
                 reg.register(
                     NodeTypeBuilder::<super::DemoPort>::new(item).build()
                 );

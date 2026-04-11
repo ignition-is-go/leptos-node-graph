@@ -9,9 +9,8 @@ use crate::menu::{NodeMenuItem, TypedNodeDef, TypedPort};
 use crate::node::Node;
 use crate::types::*;
 
-/// Override for a specific port's slot content.
-/// When a port has a PortSlot, its children replace the default label.
-type PortSlot = Arc<dyn Fn() -> AnyView + Send + Sync>;
+/// Override for a specific port's slot content. Takes the port label.
+type PortSlot = Arc<dyn Fn(String) -> AnyView + Send + Sync>;
 
 /// Builder for defining a node type.
 pub struct NodeTypeBuilder<T: PortType> {
@@ -42,8 +41,8 @@ impl<T: PortType> NodeTypeBuilder<T> {
         self
     }
 
-    /// Override a port's label with custom slot content.
-    pub fn port_slot(mut self, port_id: &str, f: impl Fn() -> AnyView + Send + Sync + 'static) -> Self {
+    /// Override a specific port's content. The function receives the port label.
+    pub fn port_slot(mut self, port_id: &str, f: impl Fn(String) -> AnyView + Send + Sync + 'static) -> Self {
         self.port_slots.insert(port_id.to_string(), Arc::new(f));
         self
     }
@@ -62,7 +61,7 @@ impl<T: PortType> NodeTypeBuilder<T> {
         if let Some(renderer) = self.custom_renderer {
             return NodeTypeDef {
                 menu_item,
-                renderer,
+                renderer: Arc::new(move |id, pos, _| renderer(id, pos)),
             };
         }
 
@@ -71,11 +70,12 @@ impl<T: PortType> NodeTypeBuilder<T> {
         let body = self.body;
         let port_slots = self.port_slots;
 
-        let renderer = Arc::new(move |node_id: String, position: RwSignal<Position>| {
+        let renderer = Arc::new(move |node_id: String, position: RwSignal<Position>, global_slots: &PortTypeSlots| {
             let label = label.clone();
             let typed_ports = typed_ports.clone();
             let body = body.clone();
             let port_slots = port_slots.clone();
+            let global_slots = global_slots.clone();
             let nid = node_id.clone();
 
             let inputs: Vec<TypedPort<T>> = typed_ports.iter()
@@ -87,8 +87,25 @@ impl<T: PortType> NodeTypeBuilder<T> {
                 .cloned()
                 .collect();
 
+            // Helper: resolve slot content for a port.
+            // Priority: 1) per-port slot, 2) global port type slot, 3) default label
+            let resolve_slot = |port: &TypedPort<T>, port_slots: &HashMap<String, PortSlot>, global_slots: &PortTypeSlots| -> Option<AnyView> {
+                // 1. Per-port override
+                if let Some(slot) = port_slots.get(&port.id) {
+                    return Some(slot(port.label.clone()));
+                }
+                // 2. Global port type override
+                let type_key = (port.port_type.type_id(), port.direction);
+                if let Some(slot) = global_slots.get(&type_key) {
+                    return Some(slot(port.label.clone()));
+                }
+                // 3. Default: no children, use label prop
+                None
+            };
+
             let nid2 = nid.clone();
             let ps1 = port_slots.clone();
+            let gs1 = global_slots.clone();
             let inputs_view: Option<Children> = if inputs.is_empty() { None } else {
                 Some(Box::new(move || {
                     inputs.iter().map(|port| {
@@ -96,8 +113,7 @@ impl<T: PortType> NodeTypeBuilder<T> {
                         let port_type = port.port_type.clone();
                         let marker: PhantomData<(String, String)> = PhantomData;
 
-                        if let Some(slot) = ps1.get(&port.id) {
-                            let content = slot();
+                        if let Some(content) = resolve_slot(port, &ps1, &gs1) {
                             view! {
                                 <InputAnchor id=port_id port_type=port_type _marker=marker>
                                     {content}
@@ -114,6 +130,7 @@ impl<T: PortType> NodeTypeBuilder<T> {
             };
 
             let ps2 = port_slots.clone();
+            let gs2 = global_slots.clone();
             let outputs_view: Option<Children> = if outputs.is_empty() { None } else {
                 Some(Box::new(move || {
                     outputs.iter().map(|port| {
@@ -121,8 +138,7 @@ impl<T: PortType> NodeTypeBuilder<T> {
                         let port_type = port.port_type.clone();
                         let marker: PhantomData<(String, String)> = PhantomData;
 
-                        if let Some(slot) = ps2.get(&port.id) {
-                            let content = slot();
+                        if let Some(content) = resolve_slot(port, &ps2, &gs2) {
                             view! {
                                 <OutputAnchor id=port_id port_type=port_type _marker=marker>
                                     {content}
@@ -171,30 +187,33 @@ impl<T: PortType> NodeTypeBuilder<T> {
     }
 }
 
+/// Global port type slots map.
+pub type PortTypeSlots = HashMap<(String, PortDirection), PortSlot>;
+
 /// A registered node type: menu info + renderer.
 #[derive(Clone)]
 pub struct NodeTypeDef {
     /// Menu item info (id, label, category, description, ports).
     pub menu_item: NodeMenuItem,
-    /// Renderer function: (node_id, position) -> AnyView.
-    renderer: Arc<dyn Fn(String, RwSignal<Position>) -> AnyView + Send + Sync>,
+    /// Renderer function: (node_id, position, global_port_type_slots) -> AnyView.
+    renderer: Arc<dyn Fn(String, RwSignal<Position>, &PortTypeSlots) -> AnyView + Send + Sync>,
 }
 
 impl NodeTypeDef {
-    /// Create with a fully custom renderer.
+    /// Create with a fully custom renderer (ignores global port type slots).
     pub fn custom(
         menu_item: NodeMenuItem,
         renderer: impl Fn(String, RwSignal<Position>) -> AnyView + Send + Sync + 'static,
     ) -> Self {
         Self {
             menu_item,
-            renderer: Arc::new(renderer),
+            renderer: Arc::new(move |id, pos, _| renderer(id, pos)),
         }
     }
 
     /// Render this node type.
-    pub fn render(&self, id: String, position: RwSignal<Position>) -> AnyView {
-        (self.renderer)(id, position)
+    pub fn render(&self, id: String, position: RwSignal<Position>, global_slots: &PortTypeSlots) -> AnyView {
+        (self.renderer)(id, position, global_slots)
     }
 }
 
@@ -203,11 +222,29 @@ impl NodeTypeDef {
 pub struct NodeTypeRegistry {
     types: HashMap<String, NodeTypeDef>,
     order: Vec<String>,
+    /// Global port type slot overrides: (type_id, direction) -> renderer(label).
+    /// Applied to all ports of that type unless the specific port has its own slot.
+    port_type_slots: HashMap<(String, PortDirection), PortSlot>,
 }
 
 impl NodeTypeRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Register a global slot renderer for all ports of a given type and direction.
+    /// The function receives the port label and returns the slot content.
+    /// This applies to ALL nodes unless a specific port_slot override is set.
+    pub fn register_port_type_slot<T: PortType>(
+        &mut self,
+        port_type: T,
+        direction: PortDirection,
+        f: impl Fn(String) -> AnyView + Send + Sync + 'static,
+    ) {
+        self.port_type_slots.insert(
+            (port_type.type_id(), direction),
+            Arc::new(f),
+        );
     }
 
     pub fn register(&mut self, def: NodeTypeDef) {
@@ -223,7 +260,7 @@ impl NodeTypeRegistry {
     }
 
     pub fn render(&self, type_id: &str, node_id: String, position: RwSignal<Position>) -> Option<AnyView> {
-        self.types.get(type_id).map(|def| def.render(node_id, position))
+        self.types.get(type_id).map(|def| def.render(node_id, position, &self.port_type_slots))
     }
 
     pub fn get(&self, type_id: &str) -> Option<&NodeTypeDef> {
