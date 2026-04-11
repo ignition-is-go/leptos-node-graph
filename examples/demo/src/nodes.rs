@@ -5,6 +5,13 @@ use leptos_node_graph::*;
 
 use crate::utils::catalog::node_catalog;
 
+/// Context for Custom node's dynamic port counts.
+#[derive(Clone, Copy)]
+struct CustomPortCounts {
+    inputs: Signal<usize>,
+    outputs: Signal<usize>,
+}
+
 // Type markers for the custom node component
 type NodeM = PhantomData<(String, String, super::DemoPort)>;
 type AnchorM = PhantomData<(String, String)>;
@@ -34,7 +41,7 @@ pub fn build_node_registry() -> NodeTypeRegistry {
             "mix" => {
                 reg.register(
                     NodeTypeBuilder::<super::DemoPort>::new(item)
-                        .body(|| view! {
+                        .body(|_node_id| view! {
                             <NodeField label="Blend">
                                 <Select options=vec!["Normal", "Multiply", "Screen", "Overlay", "Add"] />
                             </NodeField>
@@ -42,12 +49,65 @@ pub fn build_node_registry() -> NodeTypeRegistry {
                         .build()
                 );
             }
-            // Custom: dynamic ports — needs full custom renderer
+            // Custom: dynamic ports via signals
             "custom" => {
                 reg.register(
                     NodeTypeBuilder::<super::DemoPort>::new(item)
-                        .custom_renderer(|id, pos| {
-                            view! { <CustomNode id=id position=pos /> }.into_any()
+                        .body(|_node_id| {
+                            let (num_in, set_num_in) = signal(2usize);
+                            let (num_out, set_num_out) = signal(1usize);
+                            // Store in context so dynamic_inputs/outputs can read them
+                            provide_context(CustomPortCounts { inputs: num_in.into(), outputs: num_out.into() });
+                            view! {
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <NodeField label="Inputs">
+                                        <select
+                                            style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
+                                                   border-radius: 4px; color: #d4d4d8; font-size: 11px; \
+                                                   padding: 3px 6px; outline: none; cursor: pointer;"
+                                            on:change=move |ev| {
+                                                use leptos::wasm_bindgen::JsCast;
+                                                let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>();
+                                                if let Ok(n) = t.value().parse::<usize>() { set_num_in.set(n); }
+                                            }
+                                        >
+                                            {(0..=8).map(|n| view! { <option value=n.to_string() selected={n == 2}>{n.to_string()}</option> }).collect_view()}
+                                        </select>
+                                    </NodeField>
+                                    <NodeField label="Outputs">
+                                        <select
+                                            style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
+                                                   border-radius: 4px; color: #d4d4d8; font-size: 11px; \
+                                                   padding: 3px 6px; outline: none; cursor: pointer;"
+                                            on:change=move |ev| {
+                                                use leptos::wasm_bindgen::JsCast;
+                                                let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlSelectElement>();
+                                                if let Ok(n) = t.value().parse::<usize>() { set_num_out.set(n); }
+                                            }
+                                        >
+                                            {(0..=8).map(|n| view! { <option value=n.to_string() selected={n == 1}>{n.to_string()}</option> }).collect_view()}
+                                        </select>
+                                    </NodeField>
+                                </div>
+                            }.into_any()
+                        })
+                        .dynamic_inputs(|_node_id| {
+                            Signal::derive(move || {
+                                let counts = use_context::<CustomPortCounts>();
+                                let n = counts.map(|c| c.inputs.get()).unwrap_or(2);
+                                (0..n).map(|i| TypedPort::input(
+                                    format!("in_{i}"), format!("In {i}"), super::DemoPort::Any
+                                )).collect()
+                            })
+                        })
+                        .dynamic_outputs(|_node_id| {
+                            Signal::derive(move || {
+                                let counts = use_context::<CustomPortCounts>();
+                                let n = counts.map(|c| c.outputs.get()).unwrap_or(1);
+                                (0..n).map(|i| TypedPort::output(
+                                    format!("out_{i}"), format!("Out {i}"), super::DemoPort::Any
+                                )).collect()
+                            })
                         })
                         .build()
                 );
@@ -125,11 +185,11 @@ fn Select(
     }
 }
 
-// Only CustomNode needs a manual component — all others are auto-rendered
-// from their TypedNodeDef + global port type slots.
+// No manual node components needed — everything is auto-rendered
+// from TypedNodeDef + builder + global port type slots.
 
 #[component]
-fn CustomNode(id: String, position: RwSignal<Position>) -> impl IntoView {
+fn _CustomNodeUnused(id: String, position: RwSignal<Position>) -> impl IntoView {
     let (num_inputs, set_num_inputs) = signal(2usize);
     let (num_outputs, set_num_outputs) = signal(1usize);
     let id_in = id.clone();

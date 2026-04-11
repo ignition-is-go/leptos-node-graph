@@ -12,13 +12,57 @@ use crate::types::*;
 /// Override for a specific port's slot content. Takes the port label.
 type PortSlot = Arc<dyn Fn(String) -> AnyView + Send + Sync>;
 
+/// Render a single port as an InputAnchor or OutputAnchor.
+fn render_port<T: PortType>(
+    node_id: &str,
+    port: &TypedPort<T>,
+    port_slots: &HashMap<String, PortSlot>,
+    global_slots: &PortTypeSlots,
+    is_input: bool,
+) -> AnyView {
+    let port_id = format!("{}_{}", node_id, port.id);
+    let port_type = port.port_type.clone();
+    let marker: PhantomData<(String, String)> = PhantomData;
+
+    // Resolve slot: per-port > global type > default label
+    let slot_content = port_slots.get(&port.id)
+        .map(|s| s(port.label.clone()))
+        .or_else(|| {
+            let key = (port.port_type.type_id(), port.direction);
+            global_slots.get(&key).map(|s| s(port.label.clone()))
+        });
+
+    if is_input {
+        if let Some(content) = slot_content {
+            view! { <InputAnchor id=port_id port_type=port_type _marker=marker>{content}</InputAnchor> }.into_any()
+        } else {
+            let lbl = port.label.clone();
+            view! { <InputAnchor id=port_id port_type=port_type _marker=marker label=lbl /> }.into_any()
+        }
+    } else {
+        if let Some(content) = slot_content {
+            view! { <OutputAnchor id=port_id port_type=port_type _marker=marker>{content}</OutputAnchor> }.into_any()
+        } else {
+            let lbl = port.label.clone();
+            view! { <OutputAnchor id=port_id port_type=port_type _marker=marker label=lbl /> }.into_any()
+        }
+    }
+}
+
 /// Builder for defining a node type.
+/// Function that produces a reactive port list for a specific node instance.
+type DynamicPortsFn<T> = Arc<dyn Fn(String) -> Signal<Vec<TypedPort<T>>> + Send + Sync>;
+
 pub struct NodeTypeBuilder<T: PortType> {
     typed_def: TypedNodeDef<T>,
-    /// Optional body content renderer.
-    body: Option<Arc<dyn Fn() -> AnyView + Send + Sync>>,
+    /// Optional body content renderer. Receives node_id.
+    body: Option<Arc<dyn Fn(String) -> AnyView + Send + Sync>>,
     /// Per-port children overrides (keyed by port id).
     port_slots: HashMap<String, PortSlot>,
+    /// Dynamic input ports — called per node instance with node_id, returns reactive port list.
+    dynamic_inputs: Option<DynamicPortsFn<T>>,
+    /// Dynamic output ports — called per node instance with node_id, returns reactive port list.
+    dynamic_outputs: Option<DynamicPortsFn<T>>,
     /// Fully custom renderer — if set, skips auto-rendering.
     custom_renderer: Option<Arc<dyn Fn(String, RwSignal<Position>) -> AnyView + Send + Sync>>,
     _marker: PhantomData<T>,
@@ -30,14 +74,30 @@ impl<T: PortType> NodeTypeBuilder<T> {
             typed_def: def,
             body: None,
             port_slots: HashMap::new(),
+            dynamic_inputs: None,
+            dynamic_outputs: None,
             custom_renderer: None,
             _marker: PhantomData,
         }
     }
 
-    /// Set the body content (controls, dropdowns, etc. between header and ports).
-    pub fn body(mut self, f: impl Fn() -> AnyView + Send + Sync + 'static) -> Self {
+    /// Set the body content. Receives node_id for per-instance customization.
+    pub fn body(mut self, f: impl Fn(String) -> AnyView + Send + Sync + 'static) -> Self {
         self.body = Some(Arc::new(f));
+        self
+    }
+
+    /// Set dynamic input ports — a function called per node instance that returns
+    /// a reactive signal of ports. Ports are re-rendered when the signal changes.
+    /// Static ports from the TypedNodeDef are rendered first, dynamic ones after.
+    pub fn dynamic_inputs(mut self, f: impl Fn(String) -> Signal<Vec<TypedPort<T>>> + Send + Sync + 'static) -> Self {
+        self.dynamic_inputs = Some(Arc::new(f));
+        self
+    }
+
+    /// Set dynamic output ports — same as dynamic_inputs but for outputs.
+    pub fn dynamic_outputs(mut self, f: impl Fn(String) -> Signal<Vec<TypedPort<T>>> + Send + Sync + 'static) -> Self {
+        self.dynamic_outputs = Some(Arc::new(f));
         self
     }
 
@@ -69,6 +129,8 @@ impl<T: PortType> NodeTypeBuilder<T> {
         let label = self.typed_def.label;
         let body = self.body;
         let port_slots = self.port_slots;
+        let dynamic_inputs = self.dynamic_inputs;
+        let dynamic_outputs = self.dynamic_outputs;
 
         let renderer = Arc::new(move |node_id: String, position: RwSignal<Position>, global_slots: &PortTypeSlots| {
             let label = label.clone();
@@ -76,90 +138,63 @@ impl<T: PortType> NodeTypeBuilder<T> {
             let body = body.clone();
             let port_slots = port_slots.clone();
             let global_slots = global_slots.clone();
+            let dynamic_inputs = dynamic_inputs.clone();
+            let dynamic_outputs = dynamic_outputs.clone();
             let nid = node_id.clone();
 
-            let inputs: Vec<TypedPort<T>> = typed_ports.iter()
+            let static_inputs: Vec<TypedPort<T>> = typed_ports.iter()
                 .filter(|p| p.direction == PortDirection::Input)
                 .cloned()
                 .collect();
-            let outputs: Vec<TypedPort<T>> = typed_ports.iter()
+            let static_outputs: Vec<TypedPort<T>> = typed_ports.iter()
                 .filter(|p| p.direction == PortDirection::Output)
                 .cloned()
                 .collect();
 
-            // Helper: resolve slot content for a port.
-            // Priority: 1) per-port slot, 2) global port type slot, 3) default label
-            let resolve_slot = |port: &TypedPort<T>, port_slots: &HashMap<String, PortSlot>, global_slots: &PortTypeSlots| -> Option<AnyView> {
-                // 1. Per-port override
-                if let Some(slot) = port_slots.get(&port.id) {
-                    return Some(slot(port.label.clone()));
-                }
-                // 2. Global port type override
-                let type_key = (port.port_type.type_id(), port.direction);
-                if let Some(slot) = global_slots.get(&type_key) {
-                    return Some(slot(port.label.clone()));
-                }
-                // 3. Default: no children, use label prop
-                None
-            };
-
-            let nid2 = nid.clone();
+            // Build inputs ViewFn: static ports + optional dynamic ports
+            let nid_in = nid.clone();
             let ps1 = port_slots.clone();
             let gs1 = global_slots.clone();
-            let inputs_fn = if inputs.is_empty() { ViewFn::default() } else {
-                ViewFn::from(move || {
-                    inputs.iter().map(|port| {
-                        let port_id = format!("{}_{}", nid, port.id);
-                        let port_type = port.port_type.clone();
-                        let marker: PhantomData<(String, String)> = PhantomData;
+            let dyn_in = dynamic_inputs.as_ref().map(|f| f(nid.clone()));
+            let inputs_fn = ViewFn::from(move || {
+                let mut views: Vec<AnyView> = static_inputs.iter()
+                    .map(|port| render_port::<T>(&nid_in, port, &ps1, &gs1, true))
+                    .collect();
 
-                        if let Some(content) = resolve_slot(port, &ps1, &gs1) {
-                            view! {
-                                <InputAnchor id=port_id port_type=port_type _marker=marker>
-                                    {content}
-                                </InputAnchor>
-                            }.into_any()
-                        } else {
-                            let lbl = port.label.clone();
-                            view! {
-                                <InputAnchor id=port_id port_type=port_type _marker=marker label=lbl />
-                            }.into_any()
-                        }
-                    }).collect_view().into_any()
-                })
-            };
+                if let Some(ref dyn_signal) = dyn_in {
+                    for port in &dyn_signal.get() {
+                        views.push(render_port::<T>(&nid_in, port, &ps1, &gs1, true));
+                    }
+                }
 
+                views.into_iter().collect_view().into_any()
+            });
+
+            let nid_out = nid.clone();
             let ps2 = port_slots.clone();
             let gs2 = global_slots.clone();
-            let outputs_fn = if outputs.is_empty() { ViewFn::default() } else {
-                ViewFn::from(move || {
-                    outputs.iter().map(|port| {
-                        let port_id = format!("{}_{}", nid2, port.id);
-                        let port_type = port.port_type.clone();
-                        let marker: PhantomData<(String, String)> = PhantomData;
+            let dyn_out = dynamic_outputs.as_ref().map(|f| f(nid.clone()));
+            let outputs_fn = ViewFn::from(move || {
+                let mut views: Vec<AnyView> = static_outputs.iter()
+                    .map(|port| render_port::<T>(&nid_out, port, &ps2, &gs2, false))
+                    .collect();
 
-                        if let Some(content) = resolve_slot(port, &ps2, &gs2) {
-                            view! {
-                                <OutputAnchor id=port_id port_type=port_type _marker=marker>
-                                    {content}
-                                </OutputAnchor>
-                            }.into_any()
-                        } else {
-                            let lbl = port.label.clone();
-                            view! {
-                                <OutputAnchor id=port_id port_type=port_type _marker=marker label=lbl />
-                            }.into_any()
-                        }
-                    }).collect_view().into_any()
-                })
-            };
+                if let Some(ref dyn_signal) = dyn_out {
+                    for port in &dyn_signal.get() {
+                        views.push(render_port::<T>(&nid_out, port, &ps2, &gs2, false));
+                    }
+                }
+
+                views.into_iter().collect_view().into_any()
+            });
 
             let header_content: Children = Box::new(move || {
                 view! { {label.clone()} }.into_any()
             });
 
+            let nid_body = node_id.clone();
             let body_content: Children = body.map(|b| {
-                Box::new(move || b()) as Children
+                Box::new(move || b(nid_body.clone())) as Children
             }).unwrap_or_else(|| Box::new(|| ().into_any()));
 
             let node_marker: PhantomData<(String, String, T)> = PhantomData;
