@@ -5,15 +5,14 @@ use leptos_node_graph::{ConnectionEntry, GroupBox, Position};
 
 use crate::{DynNode, utils::colors::GROUP_COLORS};
 
- /// Generate a demo graph with the given number of nodes, connections, and groups.
+pub type DemoConnections = Vec<(String, ConnectionEntry<String, String>)>;
+
+/// Generate a demo graph with the given number of nodes, connections, and groups.
+#[allow(clippy::type_complexity)]
 pub fn generate_demo_graph(
     num_nodes: usize,
     num_connections: usize,
-) -> (
-    Vec<DynNode>,
-    Vec<(String, ConnectionEntry<String, String>)>,
-    Vec<GroupBox<String>>,
-) {
+) -> (Vec<DynNode>, DemoConnections, Vec<GroupBox<String>>) {
     let types = ["color_source", "mix", "math", "output"];
     let cols = 10;
     let col_spacing = 280.0;

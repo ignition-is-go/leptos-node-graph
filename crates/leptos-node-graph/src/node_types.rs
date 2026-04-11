@@ -53,6 +53,12 @@ fn render_port<T: PortType>(
 /// Function that produces a reactive port list for a specific node instance.
 type DynamicPortsFn<T> = Arc<dyn Fn(String) -> Signal<Vec<TypedPort<T>>> + Send + Sync>;
 
+/// Renderer function signature: (node_id, position) -> AnyView.
+type CustomRendererFn = Arc<dyn Fn(String, RwSignal<Position>) -> AnyView + Send + Sync>;
+
+/// Internal renderer: (node_id, position, global_port_type_slots) -> AnyView.
+type RendererFn = Arc<dyn Fn(String, RwSignal<Position>, &PortTypeSlots) -> AnyView + Send + Sync>;
+
 pub struct NodeTypeBuilder<T: PortType> {
     typed_def: TypedNodeDef<T>,
     /// Optional body content renderer. Receives node_id.
@@ -64,7 +70,7 @@ pub struct NodeTypeBuilder<T: PortType> {
     /// Dynamic output ports — called per node instance with node_id, returns reactive port list.
     dynamic_outputs: Option<DynamicPortsFn<T>>,
     /// Fully custom renderer — if set, skips auto-rendering.
-    custom_renderer: Option<Arc<dyn Fn(String, RwSignal<Position>) -> AnyView + Send + Sync>>,
+    custom_renderer: Option<CustomRendererFn>,
     _marker: PhantomData<T>,
 }
 
@@ -127,6 +133,7 @@ impl<T: PortType> NodeTypeBuilder<T> {
 
         let typed_ports = self.typed_def.ports;
         let label = self.typed_def.label;
+        let category = self.typed_def.category;
         let body = self.body;
         let port_slots = self.port_slots;
         let dynamic_inputs = self.dynamic_inputs;
@@ -188,8 +195,23 @@ impl<T: PortType> NodeTypeBuilder<T> {
                 views.into_iter().collect_view().into_any()
             });
 
+            let category = category.clone();
+            let accent = category.as_ref().and_then(|c| c.color.clone()).unwrap_or_default();
             let header_content: Children = Box::new(move || {
-                view! { {label.clone()} }.into_any()
+                let cat_view = category.as_ref().map(|cat| {
+                    let color = cat.color.clone().unwrap_or_else(|| "#71717a".into());
+                    let name = cat.name.clone();
+                    let style = format!(
+                        "color: {color}; font-weight: 400; margin-left: auto; font-size: 10px;"
+                    );
+                    view! { <span style=style>{name}</span> }
+                });
+                view! {
+                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                        <span>{label.clone()}</span>
+                        {cat_view}
+                    </div>
+                }.into_any()
             });
 
             let nid_body = node_id.clone();
@@ -208,6 +230,7 @@ impl<T: PortType> NodeTypeBuilder<T> {
                     body=body_content
                     inputs=inputs_fn
                     outputs=outputs_fn
+                    accent_color=accent
                 />
             }.into_any()
         });
@@ -228,7 +251,7 @@ pub struct NodeTypeDef {
     /// Menu item info (id, label, category, description, ports).
     pub menu_item: NodeMenuItem,
     /// Renderer function: (node_id, position, global_port_type_slots) -> AnyView.
-    renderer: Arc<dyn Fn(String, RwSignal<Position>, &PortTypeSlots) -> AnyView + Send + Sync>,
+    renderer: RendererFn,
 }
 
 impl NodeTypeDef {

@@ -17,6 +17,23 @@ pub struct MenuPort {
     pub type_id: String,
 }
 
+/// Category with name and optional color.
+#[derive(Clone, Debug, Default)]
+pub struct MenuCategory {
+    pub name: String,
+    pub color: Option<String>,
+}
+
+impl MenuCategory {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), color: None }
+    }
+
+    pub fn with_color(name: impl Into<String>, color: impl Into<String>) -> Self {
+        Self { name: name.into(), color: Some(color.into()) }
+    }
+}
+
 /// A menu item representing a node type that can be created (type-erased).
 #[derive(Clone, Debug)]
 pub struct NodeMenuItem {
@@ -24,8 +41,8 @@ pub struct NodeMenuItem {
     pub id: String,
     /// Display label.
     pub label: String,
-    /// Optional category for grouping.
-    pub category: Option<String>,
+    /// Optional category for grouping and header display.
+    pub category: Option<MenuCategory>,
     /// Optional description shown below the label.
     pub description: Option<String>,
     /// Ports this node type has.
@@ -67,7 +84,7 @@ impl<T: PortType> TypedPort<T> {
 pub struct TypedNodeDef<T: PortType> {
     pub id: String,
     pub label: String,
-    pub category: Option<String>,
+    pub category: Option<MenuCategory>,
     pub description: Option<String>,
     pub ports: Vec<TypedPort<T>>,
 }
@@ -334,7 +351,7 @@ pub fn NodeMenu(
                                 current_items
                             };
 
-                            let mut last_category: Option<String> = None;
+                            let mut last_category: Option<String> = None; // track by name
                             filtered_items
                                 .into_iter()
                                 .enumerate()
@@ -344,16 +361,18 @@ pub fn NodeMenu(
                                     let emit = emit_create;
 
                                     // Category header
-                                    let cat_header = if item.category != last_category {
-                                        last_category.clone_from(&item.category);
+                                    let cat_name = item.category.as_ref().map(|c| c.name.clone());
+                                    let cat_header = if cat_name != last_category {
+                                        last_category.clone_from(&cat_name);
                                         item.category.clone().map(|cat| {
+                                            let color = cat.color.unwrap_or_else(|| ms.category_color.clone());
                                             view! {
                                                 <div style=format!(
                                                     "padding: 4px 12px 2px; font-size: 9px; font-weight: 600; \
                                                      text-transform: uppercase; letter-spacing: 0.05em; color: {};",
-                                                    ms.category_color
+                                                    color
                                                 )>
-                                                    {cat}
+                                                    {cat.name}
                                                 </div>
                                             }
                                         })

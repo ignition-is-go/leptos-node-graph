@@ -26,9 +26,7 @@ pub struct NodeStyle {
     pub header_color: String,
     /// Header font size.
     pub header_font_size: String,
-    /// Accent color along the top edge of the node. Empty string = no accent.
-    pub header_accent_color: String,
-    /// Accent line height in pixels.
+    /// Accent line height in pixels (used when Node has accent_color prop).
     pub header_accent_height: f64,
     /// Body field label color.
     pub field_label_color: String,
@@ -61,7 +59,6 @@ impl Default for NodeStyle {
             header_background: "#232327".into(),
             header_color: "#a1a1aa".into(),
             header_font_size: "12px".into(),
-            header_accent_color: String::new(),
             header_accent_height: 2.0,
             field_label_color: "#71717a".into(),
             field_label_font_size: "10px".into(),

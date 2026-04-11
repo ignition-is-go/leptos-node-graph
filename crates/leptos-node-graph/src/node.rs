@@ -36,6 +36,8 @@ pub fn Node<N, P, C, T>(
     #[prop(optional, into)] inputs: ViewFn,
     /// Output port anchors (right column). Use ViewFn for reactive/dynamic ports.
     #[prop(optional, into)] outputs: ViewFn,
+    /// Per-node accent color. Empty string = no accent bar.
+    #[prop(optional, into)] accent_color: String,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -255,14 +257,12 @@ where
         ns2.ports_padding_y,
     );
 
-    let accent_view = if !ns2.header_accent_color.is_empty() {
+    let accent_view = if accent_color.is_empty() { None } else {
         let accent_style = format!(
             "height: {}px; background: {}; flex-shrink: 0;",
-            ns2.header_accent_height, ns2.header_accent_color,
+            ns2.header_accent_height, accent_color,
         );
         Some(view! { <div style=accent_style /> })
-    } else {
-        None
     };
 
     view! {

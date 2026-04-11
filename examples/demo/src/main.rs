@@ -53,13 +53,14 @@ fn main() {
 // Dynamic node storage
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct NodeType {
 	node_type: String,
 	category: Category,
 }
 
-
 #[derive(Clone)]
+#[allow(dead_code)]
 struct Category {
     name: String,
     color: String,
@@ -70,7 +71,8 @@ struct DynNode {
     id: String,
     node_type: String,
     position: RwSignal<Position>,
-    category: Category
+    #[allow(dead_code)]
+    category: Category,
 }
 
 
@@ -111,7 +113,7 @@ fn App() -> impl IntoView {
                         || item
                             .category
                             .as_ref()
-                            .is_some_and(|c| c.to_lowercase().contains(&search))
+                            .is_some_and(|c| c.name.to_lowercase().contains(&search))
                         || item
                             .description
                             .as_ref()
@@ -124,7 +126,6 @@ fn App() -> impl IntoView {
     let groups: RwSignal<Vec<GroupBox<String>>> = RwSignal::new(initial_groups);
 
     let on_event = {
-        let connections = connections;
         let node_registry = node_registry.clone();
         Callback::new(move |event: GraphEvent<String, String, String>| {
             console::log_1(&format!("Graph event: {:?}", event).into());
@@ -156,15 +157,18 @@ fn App() -> impl IntoView {
                     connect_direction,
                 } => {
                     let node_id = next_id(&item_id);
-                    let cat = node_registry.get(&item_id)
-                        .and_then(|def| def.menu_item.category.clone())
-                        .unwrap_or_default();
+                    let menu_cat = node_registry.get(&item_id)
+                        .and_then(|def| def.menu_item.category.clone());
+                    let cat = Category {
+                        name: menu_cat.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
+                        color: menu_cat.as_ref().and_then(|c| c.color.clone()).unwrap_or_else(|| "#71717a".into()),
+                    };
                     nodes.update(|ns| {
                         ns.push(DynNode {
                             id: node_id.clone(),
                             node_type: item_id,
                             position: RwSignal::new(position),
-                            category: Category { name: cat.clone(), color: "#71717a".into() },
+                            category: cat.clone(),
                         });
                     });
 
@@ -223,7 +227,6 @@ fn App() -> impl IntoView {
         header_padding_y: 4.0,
         body_padding_y: 2.0,
         border_radius: "0.125rem".into(),
-        header_accent_color: "#b20000".into(),
         header_accent_height: 2.0,
         outline_selected: "1px solid red".into(),
         border: "none".into(),
