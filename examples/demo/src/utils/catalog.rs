@@ -52,10 +52,7 @@ pub fn node_catalog() -> Vec<TypedNodeDef<DemoPort>> {
             label: "Custom".into(),
             category: Some("Utility".into()),
             description: Some("Configurable inputs/outputs".into()),
-            ports: vec![
-                TypedPort::input("in_0", "In 0", DemoPort::Any),
-                TypedPort::output("out_0", "Out 0", DemoPort::Any),
-            ],
+            ports: vec![], // all ports are dynamic
         },
     ]
 }

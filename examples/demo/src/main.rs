@@ -7,6 +7,7 @@ use web_sys::console;
 
 mod nodes;
 mod utils;
+mod widgets;
 use crate::nodes::build_node_registry;
 use crate::utils::{colors::random_group_color, ids::next_id, seed::generate_demo_graph};
 // ---------------------------------------------------------------------------
