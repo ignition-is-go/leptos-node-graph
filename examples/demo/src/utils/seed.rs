@@ -38,7 +38,7 @@ pub fn generate_demo_graph(
                 col as f64 * col_spacing + 50.0,
                 row as f64 * row_spacing + 50.0,
             )),
-            category: crate::Category { name: cat_name.into(), color: "#71717a".into() },
+            category: Some(leptos_node_graph::Category::new(cat_name)),
         });
     }
 

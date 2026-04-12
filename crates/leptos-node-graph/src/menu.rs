@@ -19,12 +19,12 @@ pub struct MenuPort {
 
 /// Category with name and optional color.
 #[derive(Clone, Debug, Default)]
-pub struct MenuCategory {
+pub struct Category {
     pub name: String,
     pub color: Option<String>,
 }
 
-impl MenuCategory {
+impl Category {
     pub fn new(name: impl Into<String>) -> Self {
         Self { name: name.into(), color: None }
     }
@@ -42,7 +42,7 @@ pub struct NodeMenuItem {
     /// Display label.
     pub label: String,
     /// Optional category for grouping and header display.
-    pub category: Option<MenuCategory>,
+    pub category: Option<Category>,
     /// Optional description shown below the label.
     pub description: Option<String>,
     /// Ports this node type has.
@@ -84,7 +84,7 @@ impl<T: PortType> TypedPort<T> {
 pub struct TypedNodeDef<T: PortType> {
     pub id: String,
     pub label: String,
-    pub category: Option<MenuCategory>,
+    pub category: Option<Category>,
     pub description: Option<String>,
     pub ports: Vec<TypedPort<T>>,
 }

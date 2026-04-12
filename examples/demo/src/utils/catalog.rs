@@ -1,4 +1,4 @@
-use leptos_node_graph::{MenuCategory, TypedNodeDef, TypedPort};
+use leptos_node_graph::{Category, TypedNodeDef, TypedPort};
 
 use crate::DemoPort;
 
@@ -7,7 +7,7 @@ pub fn node_catalog() -> Vec<TypedNodeDef<DemoPort>> {
         TypedNodeDef {
             id: "color_source".into(),
             label: "Color Source".into(),
-            category: Some(MenuCategory::with_color("Input", "#22d3ee")),
+            category: Some(Category::with_color("Input", "#22d3ee")),
             description: Some("Produces a color and alpha".into()),
             ports: vec![
                 TypedPort::output("color", "Color", DemoPort::Color),
@@ -17,7 +17,7 @@ pub fn node_catalog() -> Vec<TypedNodeDef<DemoPort>> {
         TypedNodeDef {
             id: "mix".into(),
             label: "Mix".into(),
-            category: Some(MenuCategory::with_color("Color", "#f59e0b")),
+            category: Some(Category::with_color("Color", "#f59e0b")),
             description: Some("Blend two colors".into()),
             ports: vec![
                 TypedPort::input("a", "A", DemoPort::Color),
@@ -29,7 +29,7 @@ pub fn node_catalog() -> Vec<TypedNodeDef<DemoPort>> {
         TypedNodeDef {
             id: "math".into(),
             label: "Math".into(),
-            category: Some(MenuCategory::with_color("Math", "#8b5cf6")),
+            category: Some(Category::with_color("Math", "#8b5cf6")),
             description: Some("Arithmetic operation".into()),
             ports: vec![
                 TypedPort::input("a", "A", DemoPort::Float),
@@ -40,7 +40,7 @@ pub fn node_catalog() -> Vec<TypedNodeDef<DemoPort>> {
         TypedNodeDef {
             id: "output".into(),
             label: "Output".into(),
-            category: Some(MenuCategory::with_color("Output", "#ef4444")),
+            category: Some(Category::with_color("Output", "#ef4444")),
             description: Some("Final output destination".into()),
             ports: vec![
                 TypedPort::input("color", "Color", DemoPort::Color),
@@ -50,7 +50,7 @@ pub fn node_catalog() -> Vec<TypedNodeDef<DemoPort>> {
         TypedNodeDef {
             id: "custom".into(),
             label: "Custom".into(),
-            category: Some(MenuCategory::with_color("Utility", "#10b981")),
+            category: Some(Category::with_color("Utility", "#10b981")),
             description: Some("Configurable inputs/outputs".into()),
             ports: vec![],
         },

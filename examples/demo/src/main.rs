@@ -53,26 +53,13 @@ fn main() {
 // Dynamic node storage
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
-struct NodeType {
-	node_type: String,
-	category: Category,
-}
-
-#[derive(Clone)]
-#[allow(dead_code)]
-struct Category {
-    name: String,
-    color: String,
-}
-
 #[derive(Clone)]
 struct DynNode {
     id: String,
     node_type: String,
     position: RwSignal<Position>,
     #[allow(dead_code)]
-    category: Category,
+    category: Option<Category>,
 }
 
 
@@ -157,18 +144,14 @@ fn App() -> impl IntoView {
                     connect_direction,
                 } => {
                     let node_id = next_id(&item_id);
-                    let menu_cat = node_registry.get(&item_id)
+                    let cat = node_registry.get(&item_id)
                         .and_then(|def| def.menu_item.category.clone());
-                    let cat = Category {
-                        name: menu_cat.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
-                        color: menu_cat.as_ref().and_then(|c| c.color.clone()).unwrap_or_else(|| "#71717a".into()),
-                    };
                     nodes.update(|ns| {
                         ns.push(DynNode {
                             id: node_id.clone(),
                             node_type: item_id,
                             position: RwSignal::new(position),
-                            category: cat.clone(),
+                            category: cat,
                         });
                     });
 
