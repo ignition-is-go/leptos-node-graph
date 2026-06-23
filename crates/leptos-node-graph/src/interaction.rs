@@ -249,12 +249,15 @@ pub fn handle_wheel<N, P, C, T>(
     let mouse_x = ev.client_x() as f64 - offset_x;
     let mouse_y = ev.client_y() as f64 - offset_y;
 
-    // Exponential (geometric) zoom: each wheel tick multiplies zoom by a
-    // constant ratio, so it feels uniform at every zoom level. An additive
-    // step would feel fast when zoomed out and sluggish when zoomed in, since
-    // perceived scale is multiplicative. At delta_y = ±100 this is ~±10% per
-    // notch, matching the previous feel around zoom = 1.
-    let zoom_factor = (-ev.delta_y() * 0.001).exp();
+    // Geometric zoom by wheel DIRECTION only (not deltaY magnitude), matching
+    // `@panzoom/panzoom`'s `zoomWithWheel`: `scale * exp((isIn ? 1 : -1) * step)`
+    // with the default `step = 0.3` (~+35% in / −26% out per notch). Using the
+    // sign rather than the magnitude keeps the per-notch feel identical across
+    // mice/trackpads and `deltaMode`s (a magnitude-based factor zoomed at wildly
+    // different speeds depending on the device's deltaY).
+    const ZOOM_STEP: f64 = 0.3;
+    let dir = if ev.delta_y() < 0.0 { 1.0 } else { -1.0 };
+    let zoom_factor = (dir * ZOOM_STEP).exp();
 
     registry.viewport.update(|vp| {
         let old_zoom = vp.zoom;
