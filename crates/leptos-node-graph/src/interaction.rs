@@ -249,11 +249,16 @@ pub fn handle_wheel<N, P, C, T>(
     let mouse_x = ev.client_x() as f64 - offset_x;
     let mouse_y = ev.client_y() as f64 - offset_y;
 
-    let zoom_delta = -ev.delta_y() * 0.001;
+    // Exponential (geometric) zoom: each wheel tick multiplies zoom by a
+    // constant ratio, so it feels uniform at every zoom level. An additive
+    // step would feel fast when zoomed out and sluggish when zoomed in, since
+    // perceived scale is multiplicative. At delta_y = ±100 this is ~±10% per
+    // notch, matching the previous feel around zoom = 1.
+    let zoom_factor = (-ev.delta_y() * 0.001).exp();
 
     registry.viewport.update(|vp| {
         let old_zoom = vp.zoom;
-        let new_zoom = (old_zoom + zoom_delta).clamp(min_zoom, max_zoom);
+        let new_zoom = (old_zoom * zoom_factor).clamp(min_zoom, max_zoom);
         let scale_change = new_zoom / old_zoom;
 
         // Zoom toward mouse position
