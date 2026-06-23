@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-leptos = { version = "0.7", features = ["csr"] }
+leptos = { version = "0.8", features = ["csr"] }
 web-sys = { version = "0.3", features = [
     "HtmlElement",
     "DomRect",
@@ -17,4 +17,4 @@ web-sys = { version = "0.3", features = [
     "Element",
     "CssStyleDeclaration",
 ] }
-leptos-use = "0.15"
+leptos-use = "0.18"
