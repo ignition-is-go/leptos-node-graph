@@ -112,12 +112,15 @@ where
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn anchor_view<N, P, C, T>(
     id: P,
     port_type: T,
     direction: PortDirection,
     label: Option<String>,
     children: Option<Children>,
+    dot_color: Option<String>,
+    dot_shape: crate::theme::DotShape,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -156,23 +159,37 @@ where
     let row_h = anchor_style.row_height;
     let dot_inset = anchor_style.dot_inset;
     let ports_pad_top = node_style.ports_padding_y;
+    // In Stacked layout, outputs render below the inputs in one column, so an
+    // output's row index must include the input count for its Y to line up.
+    let stacked = node_style.anchor_layout == crate::theme::AnchorLayout::Stacked;
 
     Effect::new(move || {
         let node_pos = node_ctx.position.get();
         let ports_y = node_ctx.ports_y_offset.get();
         let nw = node_ctx.node_width.get();
 
-        // Get this port's slot index
-        let slot_idx = reg_pos.ports.with_untracked(|ports| {
-            ports.get(&id_pos).map(|p| p.slot_index).unwrap_or(0)
+        // Get this port's slot index, plus (in Stacked mode for outputs) the
+        // number of input rows that sit above this output column.
+        let (slot_idx, rows_above) = reg_pos.ports.with_untracked(|ports| {
+            let slot = ports.get(&id_pos).map(|p| p.slot_index).unwrap_or(0);
+            let above = if stacked && direction == PortDirection::Output {
+                ports
+                    .values()
+                    .filter(|p| p.node_id == node_ctx.id && p.direction == PortDirection::Input)
+                    .count()
+            } else {
+                0
+            };
+            (slot, above)
         });
+        let row_idx = slot_idx + rows_above;
 
         let is_dragging = reg_pos.drag_state.with_untracked(|ds| ds.is_some());
         if is_dragging {
             return; // batch_set_positions handles this
         }
 
-        let y = node_pos.y + ports_y + ports_pad_top + (slot_idx as f64 * row_h) + (row_h / 2.0);
+        let y = node_pos.y + ports_y + ports_pad_top + (row_idx as f64 * row_h) + (row_h / 2.0);
         let x = match direction {
             PortDirection::Input => node_pos.x + dot_inset,
             PortDirection::Output => node_pos.x + nw - dot_inset,
@@ -509,11 +526,19 @@ where
     let is_output = direction == PortDirection::Output;
 
     // Dot style
+    let shape_css = match dot_shape {
+        crate::theme::DotShape::Circle => "border-radius: 50%;",
+        crate::theme::DotShape::Square => "border-radius: 1px;",
+        crate::theme::DotShape::Diamond => "border-radius: 1px; transform: rotate(45deg);",
+    };
     let dot_style = move || {
         let compatible = is_compatible.get();
         let source = is_source.get();
         let connected = is_connected.get();
 
+        // Connected/compatible states keep using AnchorStyle. The base
+        // (idle) state uses the per-anchor color when provided (fill + border),
+        // otherwise the global AnchorStyle dot color with a transparent fill.
         let (border_color, bg) = if compatible || source {
             (
                 as_.dot_compatible_color.as_str(),
@@ -524,6 +549,8 @@ where
                 as_.dot_connected_color.as_str(),
                 as_.dot_connected_color.as_str(),
             )
+        } else if let Some(c) = dot_color.as_deref() {
+            (c, c)
         } else {
             (as_.dot_color.as_str(), "transparent")
         };
@@ -535,7 +562,7 @@ where
         };
 
         format!(
-            "width: {}px; height: {}px; border-radius: 50%; \
+            "width: {}px; height: {}px; {shape_css} \
              border: {}px solid {border_color}; background: {bg}; \
              flex-shrink: 0; transition: all 0.15s; cursor: crosshair; {shadow}",
             as_.dot_size, as_.dot_size, as_.dot_border_width,
@@ -692,6 +719,11 @@ pub fn InputAnchor<N, P, C, T>(
     #[prop(optional, into)] label: Option<String>,
     #[prop(optional)] _marker: PhantomData<(N, C)>,
     #[prop(optional)] children: Option<Children>,
+    /// Per-anchor socket dot color override (fill + border in the idle state).
+    /// When `None`, uses `AnchorStyle.dot_color`.
+    #[prop(optional, into)] dot_color: Option<String>,
+    /// Per-anchor socket dot shape. Defaults to `DotShape::Circle`.
+    #[prop(optional)] dot_shape: crate::theme::DotShape,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -699,7 +731,15 @@ where
     C: ConnectionId,
     T: PortType,
 {
-    anchor_view::<N, P, C, T>(id, port_type, PortDirection::Input, label, children)
+    anchor_view::<N, P, C, T>(
+        id,
+        port_type,
+        PortDirection::Input,
+        label,
+        children,
+        dot_color,
+        dot_shape,
+    )
 }
 
 #[component]
@@ -709,6 +749,11 @@ pub fn OutputAnchor<N, P, C, T>(
     #[prop(optional, into)] label: Option<String>,
     #[prop(optional)] _marker: PhantomData<(N, C)>,
     #[prop(optional)] children: Option<Children>,
+    /// Per-anchor socket dot color override (fill + border in the idle state).
+    /// When `None`, uses `AnchorStyle.dot_color`.
+    #[prop(optional, into)] dot_color: Option<String>,
+    /// Per-anchor socket dot shape. Defaults to `DotShape::Circle`.
+    #[prop(optional)] dot_shape: crate::theme::DotShape,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -716,5 +761,13 @@ where
     C: ConnectionId,
     T: PortType,
 {
-    anchor_view::<N, P, C, T>(id, port_type, PortDirection::Output, label, children)
+    anchor_view::<N, P, C, T>(
+        id,
+        port_type,
+        PortDirection::Output,
+        label,
+        children,
+        dot_color,
+        dot_shape,
+    )
 }

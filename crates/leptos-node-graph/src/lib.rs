@@ -28,5 +28,5 @@ pub use node::{Node, NodeContext, NodeField};
 pub use node_types::{NodeTypeDef, NodeTypeBuilder, NodeTypeRegistry};
 pub use registry::{ConnectionEntry, EditorRegistry};
 pub use selection::SelectionBoxStyle;
-pub use theme::{AnchorStyle, GroupStyle, NodeMenuStyle, NodeStyle};
+pub use theme::{AnchorLayout, AnchorStyle, DotShape, GroupStyle, NodeMenuStyle, NodeStyle};
 pub use types::*;

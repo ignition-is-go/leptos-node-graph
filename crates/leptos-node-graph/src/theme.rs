@@ -1,3 +1,28 @@
+/// Controls how a node's input and output anchors are arranged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnchorLayout {
+    /// Inputs in a left column, outputs in a right column (default).
+    #[default]
+    Columns,
+    /// A single vertical stack: all inputs, then all outputs below them.
+    /// Each row spans the full node width so consumers can lay anchor
+    /// children out as a `[name | value]` grid. Input dots stay on the left
+    /// edge, output dots on the right edge, so connection routing is unchanged.
+    Stacked,
+}
+
+/// Shape of an anchor's socket dot. Per-anchor override; defaults to `Circle`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DotShape {
+    /// Round socket (default).
+    #[default]
+    Circle,
+    /// Rotated square — e.g. for vector/diamond sockets.
+    Diamond,
+    /// Square socket.
+    Square,
+}
+
 /// Style configuration for node cards.
 #[derive(Clone, Debug)]
 pub struct NodeStyle {
@@ -9,6 +34,12 @@ pub struct NodeStyle {
     pub shadow: String,
     pub shadow_selected: String,
     pub min_width: String,
+    /// Fixed node width (CSS length, e.g. "256px"). When non-empty the node
+    /// renders at exactly this width; combined with the node's `overflow:
+    /// hidden`, body field content that doesn't fit elides (the field value
+    /// spans are `text-overflow: ellipsis`). Empty = size to content above
+    /// `min_width` (the prior behavior).
+    pub width: String,
     pub opacity_dragging: f64,
     /// Horizontal padding applied to all sections (header, body, ports).
     pub padding_x: f64,
@@ -38,6 +69,8 @@ pub struct NodeStyle {
     pub field_label_min_width: String,
     /// Body border bottom (between body and ports).
     pub body_border_bottom: String,
+    /// How input and output anchors are arranged within the node.
+    pub anchor_layout: AnchorLayout,
 }
 
 impl Default for NodeStyle {
@@ -50,6 +83,7 @@ impl Default for NodeStyle {
             shadow: "0 4px 12px rgba(0,0,0,0.4)".into(),
             shadow_selected: "0 0 0 1px #ef4444, 0 4px 16px rgba(239,68,68,0.25)".into(),
             min_width: "160px".into(),
+            width: String::new(),
             opacity_dragging: 0.92,
             padding_x: 10.0,
             header_padding_y: 6.0,
@@ -65,6 +99,7 @@ impl Default for NodeStyle {
             field_gap: "6px".into(),
             field_label_min_width: "38px".into(),
             body_border_bottom: "1px solid #27272a".into(),
+            anchor_layout: AnchorLayout::Columns,
         }
     }
 }

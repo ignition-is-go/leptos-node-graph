@@ -38,6 +38,9 @@ pub fn Node<N, P, C, T>(
     #[prop(optional, into)] outputs: ViewFn,
     /// Per-node accent color. Empty string = no accent bar.
     #[prop(optional, into)] accent_color: String,
+    /// Per-node header background override. When `Some`, overrides
+    /// `NodeStyle.header_background` for this node only (e.g. category colors).
+    #[prop(optional, into)] header_color: Option<String>,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -220,10 +223,18 @@ where
         let shadow = if selected { &ns.shadow_selected } else { &ns.shadow };
         let opacity = if dragging { ns.opacity_dragging } else { 1.0 };
 
+        // Fixed width when the theme sets one (body content elides via the
+        // node's `overflow: hidden`); otherwise size to content above min-width.
+        let width = if ns.width.is_empty() {
+            String::new()
+        } else {
+            format!("width: {};", ns.width)
+        };
+
         format!(
             "position: absolute; left: {}px; top: {}px; \
              background: {}; border: {}; border-radius: {}; \
-             min-width: {}; box-shadow: {shadow}; user-select: none; \
+             min-width: {}; {width} box-shadow: {shadow}; user-select: none; \
              opacity: {opacity}; overflow: hidden; {outline}",
             pos.x, pos.y, ns.background, ns.border, ns.border_radius, ns.min_width,
         )
@@ -234,12 +245,13 @@ where
     // ViewFn is Fn (not FnOnce) — wrapping in move || makes it reactive
 
     let px = ns2.padding_x;
+    let header_bg = header_color.unwrap_or_else(|| ns2.header_background.clone());
     let header_style = format!(
         "padding: {}px {}px; border-bottom: {}; background: {}; \
          font-size: {}; font-weight: 600; letter-spacing: 0.03em; \
          text-transform: uppercase; color: {};",
         ns2.header_padding_y, px, ns2.header_border_bottom,
-        ns2.header_background,
+        header_bg,
         ns2.header_font_size, ns2.header_color,
     );
     let has_body = body.is_some();
@@ -252,10 +264,28 @@ where
     } else {
         String::new()
     };
-    let ports_style = format!(
-        "display: flex; justify-content: space-between; padding: {}px 0;",
-        ns2.ports_padding_y,
-    );
+    // In Stacked layout the ports section is a single vertical column (inputs
+    // then outputs below); in Columns it's two side-by-side columns.
+    let stacked = ns2.anchor_layout == crate::theme::AnchorLayout::Stacked;
+    let ports_style = if stacked {
+        format!(
+            "display: flex; flex-direction: column; padding: {}px 0;",
+            ns2.ports_padding_y,
+        )
+    } else {
+        format!(
+            "display: flex; justify-content: space-between; padding: {}px 0;",
+            ns2.ports_padding_y,
+        )
+    };
+    // Stacked rows span the full node width (dot side comes from row-reverse on
+    // outputs); Columns hugs outputs to the right edge of their column.
+    let inputs_style = "display: flex; flex-direction: column;";
+    let outputs_style = if stacked {
+        "display: flex; flex-direction: column;"
+    } else {
+        "display: flex; flex-direction: column; align-items: flex-end;"
+    };
 
     let accent_view = if accent_color.is_empty() { None } else {
         let accent_style = format!(
@@ -279,10 +309,10 @@ where
                 {body_view}
             </div>
             <div node_ref=ports_ref data-node-ports="" style=ports_style>
-                <div data-node-inputs="" style="display: flex; flex-direction: column;">
+                <div data-node-inputs="" style=inputs_style>
                     {move || inputs.run()}
                 </div>
-                <div data-node-outputs="" style="display: flex; flex-direction: column; align-items: flex-end;">
+                <div data-node-outputs="" style=outputs_style>
                     {move || outputs.run()}
                 </div>
             </div>
