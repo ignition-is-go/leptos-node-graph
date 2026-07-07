@@ -43,6 +43,15 @@ pub fn handle_canvas_mousedown<N, P, C, T>(
     C: ConnectionId,
     T: PortType,
 {
+    // Pan gesture start: middle button, or ctrl+left. This handler is on THIS
+    // container, so the flag scopes the pan to the pressed graph — the global
+    // mousemove listener checks it, so sibling graphs don't pan too. Cleared on
+    // mouseup.
+    if ev.button() == 1 || (ev.button() == 0 && ev.ctrl_key()) {
+        registry.is_panning.set(true);
+        return;
+    }
+
     // Only handle left click
     if ev.button() != 0 {
         return;
@@ -86,10 +95,10 @@ pub fn handle_canvas_mousemove<N, P, C, T>(
     C: ConnectionId,
     T: PortType,
 {
-    let buttons = ev.buttons();
-
-    // Panning: middle-button (4) or ctrl+left (1 with ctrl)
-    if buttons & 4 != 0 || (buttons & 1 != 0 && ev.ctrl_key()) {
+    // Panning — ONLY if this instance started the pan (see mousedown). The move
+    // listener is document-level, so this per-instance gate is what stops a drag
+    // from panning every open graph at once.
+    if registry.is_panning.get_untracked() {
         let dx = ev.movement_x() as f64;
         let dy = ev.movement_y() as f64;
         registry.viewport.update(|vp| {
@@ -174,6 +183,15 @@ pub fn handle_canvas_mousemove<N, P, C, T>(
     }
 }
 
+/// Handle a document-level mouseup. Ends box-select and node-drag (emitting
+/// `NodeMoved`), then resolves an in-flight draft connection.
+///
+/// The draft is cancelled UNLESS the mouseup landed on an anchor or the node
+/// menu: a successful connection is completed by the target anchor's own
+/// handler, and an anchor mouseup that *didn't* complete (the initial click of a
+/// click-to-start/click-to-complete connection) must keep the draft alive so the
+/// follow-up click can finish it. Dropping on empty canvas cancels the draft —
+/// the creation menu is opened with Tab during a draft, not by dropping.
 pub fn handle_canvas_mouseup<N, P, C, T>(
     registry: &EditorRegistry<N, P, C, T>,
     ev: MouseEvent,
@@ -184,7 +202,8 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
     C: ConnectionId,
     T: PortType,
 {
-    // End box select
+    // End pan (this instance) and box select.
+    registry.is_panning.set(false);
     registry.box_select.set(None);
 
     // End node drag - emit NodeMoved events for moved nodes
@@ -206,12 +225,12 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
         }
     }
 
-    // Cancel draft connection only if mouseup was NOT on an anchor or the node menu
+    // Cancel draft connection only if mouseup was NOT on an anchor or the node menu.
     if let Some(target) = ev.target() {
         use leptos::wasm_bindgen::JsCast;
         if let Some(el) = target.dyn_ref::<web_sys::Element>() {
-            let is_anchor: bool = el.closest("[data-anchor]").ok().flatten().is_some();
-            let is_menu: bool = el.closest("[data-node-menu]").ok().flatten().is_some();
+            let is_anchor = el.closest("[data-anchor]").ok().flatten().is_some();
+            let is_menu = el.closest("[data-node-menu]").ok().flatten().is_some();
             if !is_anchor && !is_menu {
                 registry.draft_connection.set(None);
             }

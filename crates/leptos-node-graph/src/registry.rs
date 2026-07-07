@@ -91,6 +91,11 @@ where
     pub config: RwSignal<EditorConfig>,
     pub on_event: StoredValue<Callback<GraphEvent<N, P, C>>>,
     pub box_select: RwSignal<Option<BoxSelect>>,
+    /// Whether THIS editor instance is mid-pan. Set by the container's mousedown
+    /// (so it's scoped to the pressed graph) and checked by the document-level
+    /// mousemove — without it, a pan would move every open graph at once, since the
+    /// move listener is global.
+    pub is_panning: RwSignal<bool>,
     pub drag_state: RwSignal<Option<DragState<N>>>,
     /// Pending drag canvas position — written by mousemove, applied by RAF.
     pub pending_drag_pos: RwSignal<Option<Position>>,
@@ -120,6 +125,7 @@ where
             config: RwSignal::new(config),
             on_event: StoredValue::new(on_event),
             box_select: RwSignal::new(None),
+            is_panning: RwSignal::new(false),
             drag_state: RwSignal::new(None),
             pending_drag_pos: RwSignal::new(None),
             drag_raf_pending: RwSignal::new(false),
