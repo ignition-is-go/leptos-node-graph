@@ -80,6 +80,14 @@ where
     pub selected_connections: RwSignal<HashSet<C>>,
     pub draft_connection: RwSignal<Option<DraftConnection<P, T>>>,
     pub viewport: RwSignal<ViewportTransform>,
+    /// A DEBOUNCED mirror of `viewport`, updated only after pan/zoom settles.
+    /// `NodeVisible` reads this (not the live `viewport`) so visibility — and thus
+    /// the create/dispose of off-screen node content — never churns mid-pan (the
+    /// live viewport still drives the smooth CSS transform every frame).
+    pub visibility_viewport: RwSignal<ViewportTransform>,
+    /// Measured pixel size of the editor container (screen space). Written by the
+    /// editor; read by nodes to compute their viewport visibility (`NodeVisible`).
+    pub container_size: RwSignal<Size>,
     pub config: RwSignal<EditorConfig>,
     pub on_event: StoredValue<Callback<GraphEvent<N, P, C>>>,
     pub box_select: RwSignal<Option<BoxSelect>>,
@@ -107,6 +115,8 @@ where
             selected_connections: RwSignal::new(HashSet::new()),
             draft_connection: RwSignal::new(None),
             viewport: RwSignal::new(ViewportTransform::default()),
+            visibility_viewport: RwSignal::new(ViewportTransform::default()),
+            container_size: RwSignal::new(Size::default()),
             config: RwSignal::new(config),
             on_event: StoredValue::new(on_event),
             box_select: RwSignal::new(None),

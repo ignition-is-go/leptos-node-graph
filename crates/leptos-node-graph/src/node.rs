@@ -22,6 +22,15 @@ pub struct NodeContext<N: NodeId> {
     pub node_width: Signal<f64>,
 }
 
+/// Per-node visibility flag: whether the node's rectangle intersects the visible
+/// viewport (plus an overscan margin). Provided (non-generically) in each node's
+/// context so consumers can gate expensive per-anchor content — e.g. live value
+/// subscriptions — on it. Off-screen nodes stay MOUNTED (their ports remain
+/// registered, so connection wires are unaffected); only their costly content is
+/// skipped.
+#[derive(Clone, Copy)]
+pub struct NodeVisible(pub Signal<bool>);
+
 #[component]
 pub fn Node<N, P, C, T>(
     id: N,
@@ -36,8 +45,11 @@ pub fn Node<N, P, C, T>(
     #[prop(optional, into)] inputs: ViewFn,
     /// Output port anchors (right column). Use ViewFn for reactive/dynamic ports.
     #[prop(optional, into)] outputs: ViewFn,
-    /// Per-node accent color. Empty string = no accent bar.
-    #[prop(optional, into)] accent_color: String,
+    /// Per-node accent color (the top stripe). Reactive: accepts a `String`, a
+    /// `Signal<String>`, or a closure. `None`/empty = no accent bar. Reactive so
+    /// async-resolved colors (e.g. a node's category/service color) update the
+    /// stripe once they load.
+    #[prop(optional, into)] accent_color: MaybeProp<String>,
     /// Per-node header background override. When `Some`, overrides
     /// `NodeStyle.header_background` for this node only (e.g. category colors).
     #[prop(optional, into)] header_color: Option<String>,
@@ -67,6 +79,39 @@ where
     });
     let node_width = Signal::derive(move || node_w.get());
 
+    // Viewport visibility: does this node's rect intersect the visible canvas
+    // area (screen 0..container mapped to canvas space), padded by an overscan
+    // margin so nodes near the edge stay live and don't pop while panning?
+    // Until the container is measured (size 0), default to visible so nothing is
+    // ever wrongly culled during load.
+    // MUST be a Memo (value-deduped), NOT Signal::derive: the viewport changes
+    // every pan frame, so a non-deduped derived signal would re-fire — and thus
+    // rebuild every visible node's content + subscriptions — on EVERY frame. The
+    // Memo only notifies when the bool actually flips (a node crossing the edge),
+    // so panning is smooth. A generous overscan keeps edge nodes live so they
+    // don't pop/rebuild during a normal pan.
+    let reg_vis = registry.clone();
+    let in_viewport = Memo::new(move |_| {
+        let cs = reg_vis.container_size.get();
+        if cs.width <= 0.0 || cs.height <= 0.0 {
+            return true;
+        }
+        // Read the DEBOUNCED viewport, not the live one, so visibility (and the
+        // subscription create/dispose it drives) only re-evaluates after a pan
+        // settles — never mid-pan.
+        let vp = reg_vis.visibility_viewport.get();
+        let zoom = if vp.zoom.abs() < 1e-6 { 1.0 } else { vp.zoom };
+        let tl = vp.screen_to_canvas(Position::new(0.0, 0.0));
+        let br = vp.screen_to_canvas(Position::new(cs.width, cs.height));
+        let margin = 600.0 / zoom;
+        let (vx0, vy0) = (tl.x - margin, tl.y - margin);
+        let (vx1, vy1) = (br.x + margin, br.y + margin);
+        let p = position.get();
+        let nw = node_w.get().max(1.0);
+        let nh = node_h.get().max(1.0);
+        p.x <= vx1 && p.x + nw >= vx0 && p.y <= vy1 && p.y + nh >= vy0
+    });
+
     // Derived state signals
     let id_sel = id.clone();
     let reg_sel = registry.clone();
@@ -91,6 +136,7 @@ where
         node_width,
     };
     provide_context(ctx);
+    provide_context(NodeVisible(in_viewport.into()));
 
     // Register node
     let initial_pos = position.get_untracked();
@@ -287,12 +333,13 @@ where
         "display: flex; flex-direction: column; align-items: flex-end;"
     };
 
-    let accent_view = if accent_color.is_empty() { None } else {
-        let accent_style = format!(
-            "height: {}px; background: {}; flex-shrink: 0;",
-            ns2.header_accent_height, accent_color,
-        );
-        Some(view! { <div style=accent_style /> })
+    let accent_h = ns2.header_accent_height;
+    let accent_view = move || {
+        accent_color.get().filter(|c| !c.is_empty()).map(|c| {
+            let accent_style =
+                format!("height: {accent_h}px; background: {c}; flex-shrink: 0;");
+            view! { <div style=accent_style /> }
+        })
     };
 
     view! {

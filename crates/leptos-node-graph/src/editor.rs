@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
-use leptos_use::use_event_listener;
+use leptos_use::{use_debounce_fn, use_element_size, use_event_listener, UseElementSizeReturn};
 
 use crate::connection::ConnectionRenderer;
 use crate::group::GroupBoxOverlay;
@@ -44,6 +44,36 @@ where
     provide_context(registry.clone());
 
     let container_ref = NodeRef::<leptos::html::Div>::new();
+
+    // Measure the container so each node can compute whether it's within the
+    // visible viewport (used to cull the expensive live content of off-screen
+    // nodes while keeping them mounted — their ports stay registered so wires
+    // are unaffected).
+    let UseElementSizeReturn { width: cont_w, height: cont_h } = use_element_size(container_ref);
+    let reg_cs = registry.clone();
+    Effect::new(move || {
+        reg_cs
+            .container_size
+            .set(Size::new(cont_w.get(), cont_h.get()));
+    });
+
+    // Debounce viewport → visibility_viewport so node visibility (and thus the
+    // create/dispose of off-screen node content + its server queries) settles only
+    // AFTER a pan/zoom ends. The live `viewport` still drives the CSS transform
+    // every frame, so panning stays smooth; subscriptions never churn mid-pan.
+    let reg_settle = registry.clone();
+    let settle = use_debounce_fn(
+        move || {
+            let vp = reg_settle.viewport.get_untracked();
+            reg_settle.visibility_viewport.set(vp);
+        },
+        140.0,
+    );
+    let reg_track = registry.clone();
+    Effect::new(move || {
+        let _ = reg_track.viewport.get(); // track pan/zoom
+        settle();
+    });
 
     // Menu state — owned by the editor
     let menu_open_at: RwSignal<Option<Position>> = RwSignal::new(None);
@@ -131,6 +161,13 @@ where
         if !has_menu {
             return;
         }
+        // Not while a draft connection is in flight — completing/cancelling a
+        // connection can land a fast click pair on the canvas, and the draft menu
+        // is reached with Tab, not by clicking. Don't pop it from a connection
+        // gesture.
+        if reg_dbl.draft_connection.with_untracked(Option::is_some) {
+            return;
+        }
         // Only on empty canvas
         if let Some(target) = ev.target() {
             use leptos::wasm_bindgen::JsCast;
@@ -194,6 +231,16 @@ where
                 reg_menu.draft_connection.set(None);
             }
         }
+        // The menu stole keyboard focus to its search input; once it closes, focus
+        // lands on <body> and the editor's key handlers (Tab to reopen, delete, …)
+        // go dead until the user clicks the canvas. Return focus to the editor on
+        // the next frame (after the menu element is gone).
+        let refocus = container_ref;
+        request_animation_frame(move || {
+            if let Some(el) = refocus.get_untracked() {
+                let _ = el.focus();
+            }
+        });
     });
 
     // Draft context for the menu (drives port sub-item visibility + type filtering)
