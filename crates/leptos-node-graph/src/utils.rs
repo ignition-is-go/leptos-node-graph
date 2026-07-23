@@ -16,6 +16,40 @@ pub fn bezier_path(start: Position, end: Position) -> String {
     )
 }
 
+/// Subway-style orthogonal routing: exit the source horizontally, turn at the
+/// mid-x, run vertically to the target's row, then enter the target horizontally —
+/// with small rounded corners (quadratic turns). Reads as right-angle "subway map"
+/// wiring rather than bezier curves.
+pub fn orthogonal_path(start: Position, end: Position) -> String {
+    let mid_x = (start.x + end.x) / 2.0;
+    // Corner radius, clamped so it never exceeds half the vertical run or either leg.
+    let dy = (end.y - start.y).abs();
+    let leg_x = (mid_x - start.x).abs().min((end.x - mid_x).abs());
+    let r = 8.0_f64.min(dy / 2.0).min(leg_x).max(0.0);
+    if r < 0.5 {
+        // Degenerate (near-straight / no room to round) — a plain elbow.
+        return format!(
+            "M {},{} L {},{} L {},{} L {},{}",
+            start.x, start.y, mid_x, start.y, mid_x, end.y, end.x, end.y,
+        );
+    }
+    let down = end.y >= start.y;
+    let vy0 = if down { start.y + r } else { start.y - r };
+    let vy1 = if down { end.y - r } else { end.y + r };
+    format!(
+        "M {sx},{sy} L {c0x},{sy} Q {mx},{sy} {mx},{vy0} L {mx},{vy1} Q {mx},{ey} {c1x},{ey} L {ex},{ey}",
+        sx = start.x,
+        sy = start.y,
+        c0x = mid_x - r,
+        mx = mid_x,
+        vy0 = vy0,
+        vy1 = vy1,
+        ey = end.y,
+        c1x = mid_x + r,
+        ex = end.x,
+    )
+}
+
 pub fn bezier_point(start: Position, end: Position, t: f64) -> Position {
     let (cp1, cp2) = bezier_control_points(start, end);
     let t2 = t * t;

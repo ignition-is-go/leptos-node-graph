@@ -18,7 +18,7 @@ pub mod utils;
 pub use anchor::{
     AnchorContext, AnchorMenuAction, AnchorMenuItem, AnchorMenuState, InputAnchor, OutputAnchor,
 };
-pub use connection::ConnectionStyle;
+pub use connection::{ConnectionStyle, RoutingMode};
 pub use editor::NodeEditor;
 pub use group::{GroupBounds, GroupBox, GroupBoxOverlay, GroupEvent};
 pub use history::UndoHistory;

@@ -6,6 +6,30 @@ use crate::registry::EditorRegistry;
 use crate::types::*;
 use crate::utils;
 
+/// How connections are routed between ports.
+///
+/// Provided reactively by the consumer as an `RwSignal<RoutingMode>` in
+/// context. When no context is present the renderer falls back to
+/// [`RoutingMode::Orthogonal`] so existing embeds are unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RoutingMode {
+    /// Right-angle "subway map" wiring (default).
+    #[default]
+    Orthogonal,
+    /// Classic bezier curves.
+    Bezier,
+}
+
+impl RoutingMode {
+    /// Build the SVG path `d` string for this routing mode.
+    fn path(self, start: Position, end: Position) -> String {
+        match self {
+            RoutingMode::Bezier => utils::bezier_path(start, end),
+            RoutingMode::Orthogonal => utils::orthogonal_path(start, end),
+        }
+    }
+}
+
 /// Style configuration for connections. Consumer provides this to customize appearance.
 #[derive(Clone, Debug)]
 pub struct ConnectionStyle {
@@ -40,10 +64,13 @@ where
 {
     let registry = expect_context::<EditorRegistry<N, P, C, T>>();
     let style_config = use_context::<ConnectionStyle>().unwrap_or_default();
+    // Reactive routing mode; absent context defaults to Orthogonal (subway).
+    let routing_mode = use_context::<RwSignal<RoutingMode>>();
     let reg2 = registry.clone();
     let style2 = style_config.clone();
 
     let connections_view = move || {
+        let mode = routing_mode.map(|m| m.get()).unwrap_or_default();
         let reg = registry.clone();
         let conns = reg.connections.get();
         let selected = reg.selected_connections.get();
@@ -64,7 +91,7 @@ where
                 match (source, target) {
                     // Both ports present — normal connection
                     (Some(src), Some(tgt)) => {
-                        let path_d = utils::bezier_path(src, tgt);
+                        let path_d = mode.path(src, tgt);
                         let style = format!(
                             "pointer-events: stroke; cursor: pointer; stroke: {}; stroke-width: {};",
                             stroke, width
@@ -98,7 +125,7 @@ where
                         let end_x = if is_source_present { pos.x + stub_len } else { pos.x - stub_len };
                         let end = Position::new(end_x, pos.y);
                         let (start, finish) = if is_source_present { (pos, end) } else { (end, pos) };
-                        let path_d = utils::bezier_path(start, finish);
+                        let path_d = mode.path(start, finish);
                         let style = format!(
                             "pointer-events: none; stroke: {}; stroke-width: {}; stroke-dasharray: 4 3; opacity: 0.5;",
                             stroke, width
@@ -128,6 +155,7 @@ where
     };
 
     let draft_view = move || {
+        let mode = routing_mode.map(|m| m.get()).unwrap_or_default();
         let draft = reg2.draft_connection.get();
         let sc = style2.clone();
         draft.map(|d| {
@@ -137,7 +165,7 @@ where
             } else {
                 (d.source_position, d.current_end)
             };
-            let path_d = utils::bezier_path(start, end);
+            let path_d = mode.path(start, end);
             let style = format!(
                 "pointer-events: none; stroke: {}; stroke-width: {}; stroke-dasharray: 6 4;",
                 sc.stroke_draft, sc.stroke_width
