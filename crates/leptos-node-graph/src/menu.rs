@@ -276,9 +276,25 @@ pub fn NodeMenu(
         let _canvas_pos = open_at.get()?;
         let sp = screen_pos.get()?;
 
+        // Clamp the spawn point to the viewport so the menu never falls off the
+        // bottom/right edge (its box is up to min-width 220px × max-height 360px).
+        // `max(8)` keeps a small margin off the top/left too.
+        let (vw, vh) = web_sys::window()
+            .map(|w| {
+                (
+                    w.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1920.0),
+                    w.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(1080.0),
+                )
+            })
+            .unwrap_or((1920.0, 1080.0));
+        const MENU_W: f64 = 240.0;
+        const MENU_H: f64 = 360.0;
+        let left = sp.x.min((vw - MENU_W - 8.0).max(8.0)).max(8.0);
+        let top = sp.y.min((vh - MENU_H - 8.0).max(8.0)).max(8.0);
+
         let menu_style = format!(
             "position: fixed; left: {}px; top: {}px; z-index: 10000;",
-            sp.x, sp.y,
+            left, top,
         );
 
         let current_items = items.get();
