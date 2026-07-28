@@ -32,12 +32,64 @@ pub struct AnchorMenuItem {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug)]
+impl AnchorMenuItem {
+    /// An enabled item running a consumer callback.
+    pub fn action(label: impl Into<String>, on_select: Callback<()>) -> Self {
+        Self {
+            label: label.into(),
+            action: AnchorMenuAction::Custom(on_select),
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub enum AnchorMenuAction {
     /// Remove all connections on this port.
     RemoveConnections,
     /// Remove only broken connections (where the other port is missing).
     RemoveBrokenConnections,
+    /// A consumer-supplied action (see [`AnchorMenuBuilder`]). Run by the
+    /// anchor, which then closes the menu.
+    Custom(Callback<()>),
+}
+
+impl std::fmt::Debug for AnchorMenuAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RemoveConnections => f.write_str("RemoveConnections"),
+            Self::RemoveBrokenConnections => f.write_str("RemoveBrokenConnections"),
+            Self::Custom(_) => f.write_str("Custom(..)"),
+        }
+    }
+}
+
+/// Consumer hook for the anchor right-click menu. `provide_context` one above
+/// the editor to REPLACE the built-in "Remove connections / Remove broken
+/// connections" items with your own — the consumer is the only side that knows
+/// how to name the thing on the other end of a wire.
+///
+/// The closure runs inside a reactive scope, so reading signals in it keeps the
+/// menu live. Returning an empty list means "no menu here": the right-click is
+/// swallowed and nothing opens (an anchor with nothing to offer shouldn't
+/// flash an empty panel).
+#[derive(Clone)]
+pub struct AnchorMenuBuilder<P: PortId>(AnchorMenuFn<P>);
+
+/// The builder's boxed closure: `(port, direction) -> items`.
+type AnchorMenuFn<P> =
+    std::sync::Arc<dyn Fn(&P, PortDirection) -> Vec<AnchorMenuItem> + Send + Sync>;
+
+impl<P: PortId> AnchorMenuBuilder<P> {
+    pub fn new(
+        build: impl Fn(&P, PortDirection) -> Vec<AnchorMenuItem> + Send + Sync + 'static,
+    ) -> Self {
+        Self(std::sync::Arc::new(build))
+    }
+
+    pub fn build(&self, port: &P, direction: PortDirection) -> Vec<AnchorMenuItem> {
+        (self.0)(port, direction)
+    }
 }
 
 /// State for the anchor context menu, provided to consumer for rendering.
@@ -55,7 +107,7 @@ pub struct AnchorMenuState {
 
 /// Try to complete a draft connection on the given port.
 /// Returns true if the connection was completed.
-fn try_complete_connection<N, P, C, T>(
+pub(crate) fn try_complete_connection<N, P, C, T>(
     registry: &EditorRegistry<N, P, C, T>,
     port_id: &P,
     port_direction: PortDirection,
@@ -121,6 +173,7 @@ fn anchor_view<N, P, C, T>(
     children: Option<Children>,
     dot_color: Option<String>,
     dot_shape: crate::theme::DotShape,
+    dot_multi: bool,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -211,20 +264,35 @@ where
         anchor_ref,
         leptos::ev::mousedown,
         move |ev: web_sys::MouseEvent| {
+            // Primary button only. A right-click belongs to the anchor's context
+            // menu — without this it started a draft (and on a connected input,
+            // tore the existing wire down to re-route it) before the menu could
+            // ever open.
+            if ev.button() != 0 {
+                return;
+            }
+
             let has_draft = reg_md.draft_connection.with_untracked(|d| d.is_some());
 
             if has_draft {
-                // Complete an existing draft — clicking anywhere on the anchor row is fine
+                // A draft is in flight and the press landed on this port. Swallow
+                // the event, but DON'T connect here: connections are only ever
+                // created on mouseup, so a press that gets dragged away or
+                // cancelled never leaves a connection behind. The anchor's own
+                // mouseup handler completes it on release.
+                //
+                // Swallowing matters twice over — it stops the canvas handler
+                // from cancelling the draft, and stops the `else` branch below
+                // from starting a competing draft from this port.
                 ev.stop_propagation();
                 ev.prevent_default();
-                try_complete_connection(&reg_md, &id_md, direction);
             } else {
                 // Start a new draft — only from the dot element
                 let on_dot = if let Some(target) = ev.target() {
                     use leptos::wasm_bindgen::JsCast;
-                    target.dyn_ref::<web_sys::Element>().is_some_and(|el| {
-                        el.closest("[data-anchor-dot]").ok().flatten().is_some()
-                    })
+                    target
+                        .dyn_ref::<web_sys::Element>()
+                        .is_some_and(|el| el.closest("[data-anchor-dot]").ok().flatten().is_some())
                 } else {
                     false
                 };
@@ -259,6 +327,7 @@ where
                                 port_type: source_entry.port_type.clone(),
                                 current_end: source_pos,
                                 origin_direction: PortDirection::Output,
+                                snap_target: None,
                             }));
                         }
                         return;
@@ -274,6 +343,7 @@ where
                         port_type: pt.clone(),
                         current_end: pos,
                         origin_direction: direction,
+                        snap_target: None,
                     }));
                 }
             }
@@ -287,11 +357,15 @@ where
         anchor_ref,
         leptos::ev::mouseup,
         move |ev: web_sys::MouseEvent| {
+            // Primary button only — releasing a right-click over a port must not
+            // land a connection (see the mousedown handler).
+            if ev.button() != 0 {
+                return;
+            }
             let has_draft = reg_mu.draft_connection.with_untracked(|d| d.is_some());
-            if has_draft
-                && try_complete_connection(&reg_mu, &id_mu, direction) {
-                    ev.stop_propagation();
-                }
+            if has_draft && try_complete_connection(&reg_mu, &id_mu, direction) {
+                ev.stop_propagation();
+            }
         },
     );
 
@@ -396,9 +470,16 @@ where
     // Context menu state
     let ctx_menu_pos: RwSignal<Option<Position>> = RwSignal::new(None);
 
+    // A consumer-supplied builder replaces the built-in items wholesale — it can
+    // name the far end of each wire, which the library can't.
+    let custom_menu = use_context::<AnchorMenuBuilder<P>>();
+
     let id_menu = id.clone();
     let reg_menu = registry.clone();
     let menu_items = Signal::derive(move || {
+        if let Some(builder) = custom_menu.clone() {
+            return builder.build(&id_menu, direction);
+        }
         let has_conns = reg_menu.connections.with(|conns| {
             conns
                 .values()
@@ -465,6 +546,7 @@ where
                     reg_action.emit(GraphEvent::ConnectionRemoved { id: conn_id });
                 }
             }
+            AnchorMenuAction::Custom(on_select) => on_select.run(()),
         }
     });
 
@@ -480,13 +562,17 @@ where
     };
     provide_context(menu_state);
 
-    // Right-click handler
+    // Right-click handler. An empty item list means this anchor has nothing to
+    // offer — swallow the browser menu but don't open an empty panel.
     let _ = use_event_listener(
         anchor_ref,
         leptos::ev::contextmenu,
         move |ev: web_sys::MouseEvent| {
             ev.prevent_default();
             ev.stop_propagation();
+            if menu_items.with_untracked(|items| items.is_empty()) {
+                return;
+            }
             ctx_menu_pos.set(Some(Position::new(
                 ev.client_x() as f64,
                 ev.client_y() as f64,
@@ -494,12 +580,21 @@ where
         },
     );
 
-    // Close context menu on any click elsewhere
+    // Close the context menu on a press anywhere else. NOT on a press inside the
+    // menu itself: items act on pointerup, so closing here would unmount the item
+    // out from under its own release and the action would never run.
     let _ = use_event_listener(
         leptos::prelude::document(),
         leptos::ev::pointerdown,
-        move |_ev: web_sys::PointerEvent| {
-            ctx_menu_pos.set(None);
+        move |ev: web_sys::PointerEvent| {
+            use leptos::wasm_bindgen::JsCast;
+            let in_menu = ev
+                .target()
+                .and_then(|t| t.dyn_ref::<web_sys::Element>().cloned())
+                .is_some_and(|el| el.closest("[data-anchor-menu]").ok().flatten().is_some());
+            if !in_menu {
+                ctx_menu_pos.set(None);
+            }
         },
     );
 
@@ -525,47 +620,70 @@ where
     let type_label2 = type_label.clone();
     let is_output = direction == PortDirection::Output;
 
-    // Dot style
-    let shape_css = match dot_shape {
-        crate::theme::DotShape::Circle => "border-radius: 50%;",
-        crate::theme::DotShape::Square => "border-radius: 1px;",
-        crate::theme::DotShape::Diamond => "border-radius: 1px; transform: rotate(45deg);",
+    // Dot: an SVG path sized to `dot_size`, so shape is a real silhouette
+    // (hexagon, triangle, …) and both flavors work — hollow-with-stroke when
+    // idle, solid when connected/compatible.
+    //
+    // `position: relative; z-index: 1` keeps the dot above the node's resize
+    // handle for themes that inset dots within its reach. Port geometry is
+    // computed analytically (not from offsetParent), so positioning the dot
+    // doesn't move anything.
+    let dot_box_style = {
+        let as_ = as_.clone();
+        move || {
+            let glow = if is_compatible.get() {
+                format!("filter: {};", as_.dot_compatible_glow)
+            } else {
+                String::new()
+            };
+            format!(
+                "width: {}px; height: {}px; position: relative; z-index: 1; \
+                 flex-shrink: 0; transition: all 0.15s; cursor: crosshair; {glow}",
+                as_.dot_size, as_.dot_size,
+            )
+        }
     };
-    let dot_style = move || {
-        let compatible = is_compatible.get();
-        let source = is_source.get();
-        let connected = is_connected.get();
 
-        // Connected/compatible states keep using AnchorStyle. The base
-        // (idle) state uses the per-anchor color when provided (fill + border),
-        // otherwise the global AnchorStyle dot color with a transparent fill.
-        let (border_color, bg) = if compatible || source {
-            (
-                as_.dot_compatible_color.as_str(),
-                as_.dot_compatible_color.as_str(),
-            )
-        } else if connected {
-            (
-                as_.dot_connected_color.as_str(),
-                as_.dot_connected_color.as_str(),
-            )
-        } else if let Some(c) = dot_color.as_deref() {
-            (c, c)
-        } else {
-            (as_.dot_color.as_str(), "transparent")
-        };
-
-        let shadow = if compatible {
-            format!("box-shadow: {};", as_.dot_compatible_shadow)
-        } else {
-            String::new()
-        };
-
+    // Stroke/fill per state. The idle state uses the per-anchor color when
+    // provided (solid), otherwise the global dot color with a hollow center.
+    let dot_paint = {
+        let as_ = as_.clone();
+        move || {
+            let (stroke, fill) = if is_compatible.get() || is_source.get() {
+                (
+                    as_.dot_compatible_color.clone(),
+                    as_.dot_compatible_color.clone(),
+                )
+            } else if is_connected.get() {
+                (
+                    as_.dot_connected_color.clone(),
+                    as_.dot_connected_color.clone(),
+                )
+            } else if let Some(c) = dot_color.clone() {
+                (c.clone(), c)
+            } else {
+                (as_.dot_color.clone(), "none".to_string())
+            };
+            (stroke, fill)
+        }
+    };
+    let dot_stroke = {
+        let dot_paint = dot_paint.clone();
+        Signal::derive(move || dot_paint().0)
+    };
+    let dot_fill = Signal::derive(move || dot_paint().1);
+    // Border width is authored in px against `dot_size`; convert to viewBox units.
+    let stroke_units = as_.dot_border_width * 24.0 / as_.dot_size.max(1.0);
+    let shape_path = dot_shape.path();
+    // Collection sockets stack a smaller ghost copy behind the primary shape,
+    // offset toward the node interior (right for inputs, left for outputs).
+    let ghost_transform = {
+        let dx = if is_output { -5.0 } else { 5.0 };
+        // scale(0.72) about the box center, then shift.
         format!(
-            "width: {}px; height: {}px; {shape_css} \
-             border: {}px solid {border_color}; background: {bg}; \
-             flex-shrink: 0; transition: all 0.15s; cursor: crosshair; {shadow}",
-            as_.dot_size, as_.dot_size, as_.dot_border_width,
+            "translate({} {}) scale(0.72)",
+            12.0 * 0.28 + dx,
+            12.0 * 0.28
         )
     };
 
@@ -587,11 +705,19 @@ where
         } else {
             ""
         };
+        // With a draft in flight the whole row completes the connection, so it
+        // matches the dot. Otherwise the row falls through to the node drag —
+        // inherit the node's grab cursor rather than overriding it.
+        let cursor = if is_compatible.get() {
+            "cursor: crosshair;"
+        } else {
+            ""
+        };
 
         format!(
             "display: flex; align-items: center; gap: {}; padding: {}; \
              height: {}px; overflow: hidden; \
-             cursor: default; transition: opacity 0.15s; opacity: {opacity}; {pointer} {dir}",
+             {cursor} transition: opacity 0.15s; opacity: {opacity}; {pointer} {dir}",
             as2.row_gap, as2.row_padding, as2.row_height,
         )
     };
@@ -630,7 +756,8 @@ where
              background: {}; border: {}; border-radius: 4px; \
              padding: 2px 6px; font-size: 10px; color: {}; white-space: nowrap; \
              pointer-events: none; z-index: 10000;",
-            mp.x + offset_x, mp.y,
+            mp.x + offset_x,
+            mp.y,
             tooltip_style_cfg.tooltip_background,
             tooltip_style_cfg.tooltip_border,
             tooltip_style_cfg.tooltip_color,
@@ -647,12 +774,23 @@ where
         ().into_any()
     };
 
-    // Context menu
+    // Context menu.
+    //
+    // PORTALLED to the body, and not optional: the menu lives inside a node card,
+    // which sits under the canvas `transform`. A transformed ancestor is the
+    // containing block for `position: fixed` descendants, so an in-place menu is
+    // offset by the pan/zoom AND clipped by the node's `overflow: hidden` — it
+    // renders, in the DOM, invisibly in the wrong place. Out at the body, the
+    // event's client coords mean what they say. (The tooltip above has the same
+    // bug in miniature; it's cosmetic and stays for now.)
     let ms = use_context::<crate::theme::NodeMenuStyle>().unwrap_or_default();
     let ctx_menu_view = move || {
         let pos = ctx_menu_pos.get()?;
         let items = menu_items.get();
         let on_act = on_action;
+        // Cloned out of the style struct: the markup below lives in a `ChildrenFn`,
+        // so it may only borrow from this closure's environment.
+        let item_color = ms.item_color.clone();
 
         let style = format!(
             "position: fixed; left: {}px; top: {}px; z-index: 10001; \
@@ -662,14 +800,17 @@ where
         );
 
         Some(view! {
-            <div style=style data-anchor-menu="">
-                {items.into_iter().map(|item| {
+          // `Portal` children are a `ChildrenFn` — everything the markup uses has
+          // to be cloned per call, not moved out of the closure.
+          <leptos::portal::Portal>
+            <div style=style.clone() data-anchor-menu="">
+                {items.clone().into_iter().map(|item| {
                     let action = item.action.clone();
                     let enabled = item.enabled;
                     let item_style = if enabled {
-                        format!("padding: 6px 12px; cursor: pointer; font-size: 12px; color: {};", ms.item_color)
+                        format!("padding: 6px 12px; cursor: pointer; font-size: 12px; color: {};", item_color)
                     } else {
-                        format!("padding: 6px 12px; font-size: 12px; color: {}; opacity: 0.35; pointer-events: none;", ms.item_color)
+                        format!("padding: 6px 12px; font-size: 12px; color: {}; opacity: 0.35; pointer-events: none;", item_color)
                     };
                     view! {
                         <div
@@ -686,6 +827,7 @@ where
                     }
                 }).collect_view()}
             </div>
+          </leptos::portal::Portal>
         })
     };
 
@@ -703,7 +845,32 @@ where
                 }
                 on:mouseleave=move |_| set_dot_hovered.set(false)
             >
-                <div style=dot_style node_ref=dot_ref data-anchor-dot="" />
+                <div style=dot_box_style node_ref=dot_ref data-anchor-dot="">
+                    <svg
+                        viewBox="0 0 24 24"
+                        style="width: 100%; height: 100%; display: block; overflow: visible;"
+                    >
+                        {dot_multi
+                            .then(|| {
+                                view! {
+                                    <path
+                                        d=shape_path
+                                        transform=ghost_transform
+                                        fill=move || dot_fill.get()
+                                        stroke=move || dot_stroke.get()
+                                        stroke-width=stroke_units
+                                        opacity="0.45"
+                                    />
+                                }
+                            })}
+                        <path
+                            d=shape_path
+                            fill=move || dot_fill.get()
+                            stroke=move || dot_stroke.get()
+                            stroke-width=stroke_units
+                        />
+                    </svg>
+                </div>
             </div>
             {label_or_children}
         </div>
@@ -721,9 +888,15 @@ pub fn InputAnchor<N, P, C, T>(
     #[prop(optional)] children: Option<Children>,
     /// Per-anchor socket dot color override (fill + border in the idle state).
     /// When `None`, uses `AnchorStyle.dot_color`.
-    #[prop(optional, into)] dot_color: Option<String>,
+    #[prop(optional, into)]
+    dot_color: Option<String>,
     /// Per-anchor socket dot shape. Defaults to `DotShape::Circle`.
-    #[prop(optional)] dot_shape: crate::theme::DotShape,
+    #[prop(optional)]
+    dot_shape: crate::theme::DotShape,
+    /// Draw a smaller ghost copy of the shape behind the socket — for pins that
+    /// carry a COLLECTION of the shape's type (arrays/lists).
+    #[prop(optional)]
+    dot_multi: bool,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -739,6 +912,7 @@ where
         children,
         dot_color,
         dot_shape,
+        dot_multi,
     )
 }
 
@@ -751,9 +925,15 @@ pub fn OutputAnchor<N, P, C, T>(
     #[prop(optional)] children: Option<Children>,
     /// Per-anchor socket dot color override (fill + border in the idle state).
     /// When `None`, uses `AnchorStyle.dot_color`.
-    #[prop(optional, into)] dot_color: Option<String>,
+    #[prop(optional, into)]
+    dot_color: Option<String>,
     /// Per-anchor socket dot shape. Defaults to `DotShape::Circle`.
-    #[prop(optional)] dot_shape: crate::theme::DotShape,
+    #[prop(optional)]
+    dot_shape: crate::theme::DotShape,
+    /// Draw a smaller ghost copy of the shape behind the socket — for pins that
+    /// carry a COLLECTION of the shape's type (arrays/lists).
+    #[prop(optional)]
+    dot_multi: bool,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -769,5 +949,6 @@ where
         children,
         dot_color,
         dot_shape,
+        dot_multi,
     )
 }

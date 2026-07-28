@@ -12,6 +12,9 @@ pub enum AnchorLayout {
 }
 
 /// Shape of an anchor's socket dot. Per-anchor override; defaults to `Circle`.
+///
+/// Sockets are drawn as SVG paths, so every shape supports both flavors the
+/// anchor uses: stroked-and-hollow (idle) and solid (connected / compatible).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DotShape {
     /// Round socket (default).
@@ -21,6 +24,30 @@ pub enum DotShape {
     Diamond,
     /// Square socket.
     Square,
+    /// Six-sided socket — reads as "structured / opaque" next to the primitives.
+    Hexagon,
+    /// Right-pointing triangle — reads as "flow / trigger".
+    Triangle,
+    /// Four-pointed star.
+    Star,
+}
+
+impl DotShape {
+    /// The socket outline as a single SVG path, in a `0 0 24 24` viewBox.
+    ///
+    /// Geometry stays ~2 units inside the box so a stroke (up to ~4 viewBox
+    /// units, i.e. a 1.5px border on an 8px dot) never clips.
+    pub fn path(self) -> &'static str {
+        match self {
+            // Two half-circle arcs — a `<path>` keeps every shape one element.
+            DotShape::Circle => "M12 2.5A9.5 9.5 0 1 0 12 21.5A9.5 9.5 0 1 0 12 2.5Z",
+            DotShape::Diamond => "M12 2.5L21.5 12L12 21.5L2.5 12Z",
+            DotShape::Square => "M3 3H21V21H3Z",
+            DotShape::Hexagon => "M12 2.5L21 7.75V18.25L12 21.5L3 18.25V7.75Z",
+            DotShape::Triangle => "M4.5 3L21 12L4.5 21Z",
+            DotShape::Star => "M12 2L14.6 9.4L22 12L14.6 14.6L12 22L9.4 14.6L2 12L9.4 9.4Z",
+        }
+    }
 }
 
 /// Style configuration for node cards.
@@ -71,6 +98,28 @@ pub struct NodeStyle {
     pub body_border_bottom: String,
     /// How input and output anchors are arranged within the node.
     pub anchor_layout: AnchorLayout,
+    /// Cursor over the parts of the node that start a drag — i.e. everything
+    /// except anchor dots (crosshair) and form controls, which set their own.
+    pub cursor: String,
+    /// Cursor while a node drag is in progress.
+    pub cursor_dragging: String,
+    /// Cursor over the resize handle, and node-wide while a resize is running.
+    pub cursor_resize: String,
+    /// Whether nodes can be width-resized by dragging their right edge.
+    pub resizable: bool,
+    /// Hit width of the right-edge resize handle, in pixels. Keep it below
+    /// `AnchorStyle.dot_inset` so the handle doesn't sit under the output dots
+    /// (where they do overlap, the dots win).
+    pub resize_handle_width: f64,
+    /// Handle color while that node is being resized (it's invisible otherwise —
+    /// the cursor is the idle affordance).
+    pub resize_handle_color: String,
+    /// Floor for a dragged width. The effective floor is the larger of this and
+    /// `min_width` when that is a plain px value, so a dragged width can't drift
+    /// below what CSS will actually render.
+    pub resize_min_width: f64,
+    /// Ceiling for a dragged width. `None` = unbounded.
+    pub resize_max_width: Option<f64>,
 }
 
 impl Default for NodeStyle {
@@ -100,6 +149,14 @@ impl Default for NodeStyle {
             field_label_min_width: "38px".into(),
             body_border_bottom: "1px solid #27272a".into(),
             anchor_layout: AnchorLayout::Columns,
+            cursor: "grab".into(),
+            cursor_dragging: "grabbing".into(),
+            cursor_resize: "ew-resize".into(),
+            resizable: true,
+            resize_handle_width: 6.0,
+            resize_handle_color: "#71717a".into(),
+            resize_min_width: 120.0,
+            resize_max_width: None,
         }
     }
 }
@@ -186,8 +243,10 @@ pub struct AnchorStyle {
     pub dot_connected_color: String,
     /// Dot color when compatible with draft.
     pub dot_compatible_color: String,
-    /// Dot glow when compatible.
-    pub dot_compatible_shadow: String,
+    /// Dot glow when compatible, as a CSS `filter` value. A filter (not a
+    /// box-shadow) so the glow follows the socket's SHAPE — a box-shadow would
+    /// halo a square around a triangle or hexagon socket.
+    pub dot_compatible_glow: String,
     /// Label font size.
     pub label_font_size: String,
     /// Label default color.
@@ -223,7 +282,8 @@ impl Default for AnchorStyle {
             dot_color: "#71717a".into(),
             dot_connected_color: "#71717a".into(),
             dot_compatible_color: "#22d3ee".into(),
-            dot_compatible_shadow: "0 0 6px #22d3ee, 0 0 12px rgba(34,211,238,0.3)".into(),
+            dot_compatible_glow:
+                "drop-shadow(0 0 2px #22d3ee) drop-shadow(0 0 5px rgba(34,211,238,0.45))".into(),
             label_font_size: "11px".into(),
             label_color: "#a1a1aa".into(),
             label_compatible_color: "#22d3ee".into(),
