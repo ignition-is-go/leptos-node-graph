@@ -1,9 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_database": "leptos-node-graph",
-  "project_id": "b09fff37-f3b2-40d3-a625-771dfa5f57e0",
-  "global_dolt_database": "beads_global",
-  "global_project_id": "00000000-0000-0000-0000-000000000000"
-}
