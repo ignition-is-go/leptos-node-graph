@@ -16,10 +16,49 @@ pub fn bezier_path(start: Position, end: Position) -> String {
     )
 }
 
+/// SVG path through a polyline, with each corner replaced by a quadratic turn
+/// of up to `radius` (clamped to half of the shorter adjoining leg, so short
+/// segments round proportionally instead of overshooting).
+///
+/// This is how routed subway paths are drawn: the router emits sharp waypoints
+/// and the corner rounding is purely presentational.
+pub fn rounded_polyline_path(pts: &[Position], radius: f64) -> String {
+    if pts.len() < 2 {
+        return String::new();
+    }
+    let mut d = format!("M {},{}", pts[0].x, pts[0].y);
+    for i in 1..pts.len() - 1 {
+        let (prev, curr, next) = (pts[i - 1], pts[i], pts[i + 1]);
+        let (dx1, dy1) = (curr.x - prev.x, curr.y - prev.y);
+        let (dx2, dy2) = (next.x - curr.x, next.y - curr.y);
+        let len1 = dx1.hypot(dy1);
+        let len2 = dx2.hypot(dy2);
+        if len1 == 0.0 || len2 == 0.0 {
+            d.push_str(&format!(" L {},{}", curr.x, curr.y));
+            continue;
+        }
+        let pull1 = radius.min(len1 / 2.0);
+        let pull2 = radius.min(len2 / 2.0);
+        let arc_start = Position::new(curr.x - dx1 / len1 * pull1, curr.y - dy1 / len1 * pull1);
+        let arc_end = Position::new(curr.x + dx2 / len2 * pull2, curr.y + dy2 / len2 * pull2);
+        d.push_str(&format!(
+            " L {},{} Q {},{} {},{}",
+            arc_start.x, arc_start.y, curr.x, curr.y, arc_end.x, arc_end.y
+        ));
+    }
+    let last = pts[pts.len() - 1];
+    d.push_str(&format!(" L {},{}", last.x, last.y));
+    d
+}
+
 /// Subway-style orthogonal routing: exit the source horizontally, turn at the
 /// mid-x, run vertically to the target's row, then enter the target horizontally —
 /// with small rounded corners (quadratic turns). Reads as right-angle "subway map"
 /// wiring rather than bezier curves.
+///
+/// This is the LOCAL fallback for a single pair of points (drafts, dangling
+/// stubs). Real connections are routed as a batch by [`crate::subway`], which
+/// also steers around nodes and separates shared corridors.
 pub fn orthogonal_path(start: Position, end: Position) -> String {
     let mid_x = (start.x + end.x) / 2.0;
     // Corner radius, clamped so it never exceeds half the vertical run or either leg.
@@ -83,6 +122,12 @@ pub fn snap_to_grid(pos: Position, grid_size: f64) -> Position {
         x: (pos.x / grid_size).round() * grid_size,
         y: (pos.y / grid_size).round() * grid_size,
     }
+}
+
+/// Parse a CSS length that is a plain `px` value (e.g. `"160px"`). Returns
+/// `None` for any other unit or keyword, which callers read as "no constraint".
+pub fn parse_px(value: &str) -> Option<f64> {
+    value.trim().strip_suffix("px")?.trim().parse::<f64>().ok()
 }
 
 pub fn distance(a: Position, b: Position) -> f64 {

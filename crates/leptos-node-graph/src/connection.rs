@@ -1,10 +1,15 @@
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
 
-use crate::registry::EditorRegistry;
+use crate::registry::{ConnectionEntry, EditorRegistry, NodeEntry, PortEntry};
+use crate::subway::{self, SubwayConnection, SubwayOptions, SubwayRect};
 use crate::types::*;
 use crate::utils;
+
+/// Corner rounding applied to routed polylines when drawing them.
+const SUBWAY_CORNER_RADIUS: f64 = 6.0;
 
 /// How connections are routed between ports.
 ///
@@ -28,6 +33,57 @@ impl RoutingMode {
             RoutingMode::Orthogonal => utils::orthogonal_path(start, end),
         }
     }
+}
+
+/// Route every fully-connected wire in one batch, so the router can steer
+/// around nodes and keep parallel runs off each other.
+///
+/// Connections are fed in a stable (debug-id) order: the solver lays routes
+/// down shortest-first and later ones pay to cross earlier ones, so the input
+/// order has to be reproducible or the picture would shuffle between renders.
+fn subway_routes<N, P, C, T>(
+    conns: &HashMap<C, ConnectionEntry<P, C>>,
+    ports: &HashMap<P, PortEntry<N, P, T>>,
+    nodes: &HashMap<N, NodeEntry<N>>,
+) -> HashMap<C, Vec<Position>>
+where
+    N: NodeId,
+    P: PortId,
+    C: ConnectionId,
+    T: PortType,
+{
+    let mut rects: Vec<SubwayRect> = Vec::with_capacity(nodes.len());
+    let mut rect_of: HashMap<&N, usize> = HashMap::with_capacity(nodes.len());
+    for (id, node) in nodes {
+        rect_of.insert(id, rects.len());
+        rects.push(SubwayRect {
+            x: node.position.x,
+            y: node.position.y,
+            w: node.size.width,
+            h: node.size.height,
+        });
+    }
+
+    let mut ordered: Vec<(&C, &ConnectionEntry<P, C>)> = conns.iter().collect();
+    ordered.sort_by_cached_key(|(id, _)| format!("{id:?}"));
+
+    let mut ids: Vec<C> = Vec::with_capacity(ordered.len());
+    let mut inputs: Vec<SubwayConnection> = Vec::with_capacity(ordered.len());
+    for (id, conn) in ordered {
+        let (Some(src), Some(tgt)) = (ports.get(&conn.source), ports.get(&conn.target)) else {
+            continue;
+        };
+        ids.push((*id).clone());
+        inputs.push(SubwayConnection {
+            start: src.position,
+            end: tgt.position,
+            start_rect: rect_of.get(&src.node_id).copied(),
+            end_rect: rect_of.get(&tgt.node_id).copied(),
+        });
+    }
+
+    let routes = subway::compute_subway_routes(&rects, &inputs, &SubwayOptions::default());
+    ids.into_iter().zip(routes).collect()
 }
 
 /// Style configuration for connections. Consumer provides this to customize appearance.
@@ -76,6 +132,12 @@ where
         let selected = reg.selected_connections.get();
         let ports = reg.ports.get();
         let sc = style_config.clone();
+        // Orthogonal mode routes the whole batch at once (around nodes, lanes
+        // separated); bezier stays a per-wire curve.
+        let routes = match mode {
+            RoutingMode::Orthogonal => subway_routes(&conns, &ports, &reg.nodes.get()),
+            RoutingMode::Bezier => HashMap::new(),
+        };
 
         conns
             .values()
@@ -91,7 +153,15 @@ where
                 match (source, target) {
                     // Both ports present — normal connection
                     (Some(src), Some(tgt)) => {
-                        let path_d = mode.path(src, tgt);
+                        // Routed polyline when the batch produced one; the
+                        // local elbow/curve otherwise (bezier mode, or a wire
+                        // that appeared after the solve).
+                        let path_d = match routes.get(&conn.id) {
+                            Some(pts) if pts.len() >= 2 => {
+                                utils::rounded_polyline_path(pts, SUBWAY_CORNER_RADIUS)
+                            }
+                            _ => mode.path(src, tgt),
+                        };
                         let style = format!(
                             "pointer-events: stroke; cursor: pointer; stroke: {}; stroke-width: {};",
                             stroke, width
