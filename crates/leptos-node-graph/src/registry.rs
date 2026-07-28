@@ -64,6 +64,22 @@ pub struct DragState<N: NodeId> {
     pub alt_key: bool,
 }
 
+/// Width-resize state for one node. Started by that node's right-edge handle,
+/// driven by the document-level mousemove, cleared on mouseup.
+#[derive(Clone)]
+pub struct ResizeState<N: NodeId> {
+    pub node_id: N,
+    /// Canvas-space x where the gesture started.
+    pub start_x: f64,
+    /// The node's rendered width when the gesture started.
+    pub start_width: f64,
+    /// The node's width signal — written live so the node re-renders as it drags.
+    pub width_signal: RwSignal<Option<f64>>,
+    /// Clamp bounds, resolved from the theme when the gesture started.
+    pub min_width: f64,
+    pub max_width: Option<f64>,
+}
+
 /// The central reactive state store.
 #[derive(Clone)]
 pub struct EditorRegistry<N, P, C, T>
@@ -96,7 +112,23 @@ where
     /// mousemove — without it, a pan would move every open graph at once, since the
     /// move listener is global.
     pub is_panning: RwSignal<bool>,
+    /// Client-space pointer position from the previous pan frame.
+    ///
+    /// Pan deltas are measured against this rather than taken from
+    /// `MouseEvent.movementX/Y`: Chrome reports those in PHYSICAL device pixels
+    /// while `clientX/Y` are CSS pixels, so on a HiDPI screen (or with page
+    /// zoom) `movementX` overstates the cursor's travel by the device pixel
+    /// ratio and the canvas slides faster than the mouse.
+    pub pan_origin: RwSignal<Option<Position>>,
+    /// Whether the node-creation menu is open on this editor.
+    ///
+    /// Mirrored from the menu's own `open_at` signal so the interaction handlers
+    /// can see it: an open menu takes ownership of the in-flight draft, and a
+    /// mouseup that would otherwise cancel the draft has to leave it alone.
+    pub menu_open: RwSignal<bool>,
     pub drag_state: RwSignal<Option<DragState<N>>>,
+    /// In-flight node width resize, if any.
+    pub resize_state: RwSignal<Option<ResizeState<N>>>,
     /// Pending drag canvas position — written by mousemove, applied by RAF.
     pub pending_drag_pos: RwSignal<Option<Position>>,
     /// Whether a RAF callback is already scheduled for drag.
@@ -126,7 +158,10 @@ where
             on_event: StoredValue::new(on_event),
             box_select: RwSignal::new(None),
             is_panning: RwSignal::new(false),
+            pan_origin: RwSignal::new(None),
+            menu_open: RwSignal::new(false),
             drag_state: RwSignal::new(None),
+            resize_state: RwSignal::new(None),
             pending_drag_pos: RwSignal::new(None),
             drag_raf_pending: RwSignal::new(false),
         }
@@ -194,7 +229,8 @@ where
     ) {
         self.ports.update(|ports| {
             // New port gets the next index for this node+direction
-            let next_idx = ports.values()
+            let next_idx = ports
+                .values()
                 .filter(|p| p.node_id == node_id && p.direction == direction)
                 .count();
 
@@ -234,7 +270,8 @@ where
 
             // Reindex siblings preserving their original order
             if let Some((node_id, direction)) = &port_info {
-                let mut siblings: Vec<(usize, P)> = ports.values()
+                let mut siblings: Vec<(usize, P)> = ports
+                    .values()
                     .filter(|p| &p.node_id == node_id && p.direction == *direction)
                     .map(|p| (p.slot_index, p.id.clone()))
                     .collect();
@@ -302,10 +339,11 @@ where
         self.ports.update(|ports| {
             for entry in ports.values_mut() {
                 if let Some(new_node_pos) = update_map.get(&entry.node_id)
-                    && let Some(offset) = entry.offset {
-                        entry.position =
-                            Position::new(new_node_pos.x + offset.x, new_node_pos.y + offset.y);
-                    }
+                    && let Some(offset) = entry.offset
+                {
+                    entry.position =
+                        Position::new(new_node_pos.x + offset.x, new_node_pos.y + offset.y);
+                }
             }
         });
 
@@ -456,6 +494,102 @@ where
     }
 
     /// Return the set of node IDs whose bounding rectangles intersect the given rect.
+    /// The compatible port nearest `cursor` within `max_dist` (canvas units),
+    /// for the draft currently in flight.
+    ///
+    /// Applies exactly the rules a real connection would — opposite direction,
+    /// different node, type-compatible — so the wire can never snap to a port
+    /// that would refuse the connection on release.
+    pub fn snap_target_for_draft(&self, cursor: Position, max_dist: f64) -> Option<(P, Position)> {
+        let draft = self.draft_connection.with_untracked(|d| d.clone())?;
+        let source = self.get_port(&draft.source_port)?;
+
+        let mut best: Option<(P, Position, f64)> = None;
+        self.ports.with_untracked(|ports| {
+            for entry in ports.values() {
+                if entry.direction == draft.origin_direction || entry.node_id == source.node_id {
+                    continue;
+                }
+                let (output_type, input_type) = if draft.origin_direction == PortDirection::Output {
+                    (&source.port_type, &entry.port_type)
+                } else {
+                    (&entry.port_type, &source.port_type)
+                };
+                if !T::compatible(output_type, input_type) {
+                    continue;
+                }
+                let dist = crate::utils::distance(cursor, entry.position);
+                if dist <= max_dist && best.as_ref().is_none_or(|(_, _, b)| dist < *b) {
+                    best = Some((entry.id.clone(), entry.position, dist));
+                }
+            }
+        });
+        best.map(|(id, pos, _)| (id, pos))
+    }
+
+    /// Bounding box of every registered node, in canvas space. `None` when the
+    /// graph is empty.
+    pub fn nodes_bounds(&self) -> Option<Rect> {
+        self.nodes.with_untracked(|nodes| {
+            let mut entries = nodes.values();
+            let first = entries.next()?;
+            let (mut min_x, mut min_y) = (first.position.x, first.position.y);
+            let mut max_x = first.position.x + first.size.width;
+            let mut max_y = first.position.y + first.size.height;
+            for entry in entries {
+                min_x = min_x.min(entry.position.x);
+                min_y = min_y.min(entry.position.y);
+                max_x = max_x.max(entry.position.x + entry.size.width);
+                max_y = max_y.max(entry.position.y + entry.size.height);
+            }
+            Some(Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
+        })
+    }
+
+    /// Pan and zoom so `rect` (canvas space) is centered and fits the container,
+    /// inset by `padding` screen pixels. Zoom is clamped to the config's range,
+    /// and additionally to `max_zoom_override` when given — framing uses that to
+    /// avoid magnifying a small graph.
+    ///
+    /// No-op until the container has been measured.
+    pub fn fit_rect(&self, rect: &Rect, padding: f64, max_zoom_override: Option<f64>) {
+        let container = self.container_size.get_untracked();
+        if container.width <= 0.0 || container.height <= 0.0 {
+            return;
+        }
+
+        // A single zero-size node would otherwise divide by zero.
+        let width = rect.size.width.max(1.0);
+        let height = rect.size.height.max(1.0);
+        let avail_w = (container.width - 2.0 * padding).max(1.0);
+        let avail_h = (container.height - 2.0 * padding).max(1.0);
+
+        let (min_zoom, max_zoom) = self.config.with_untracked(|c| (c.min_zoom, c.max_zoom));
+        let ceiling = max_zoom_override.map_or(max_zoom, |m| m.min(max_zoom));
+        let zoom = (avail_w / width)
+            .min(avail_h / height)
+            .clamp(min_zoom, ceiling.max(min_zoom));
+
+        let center_x = rect.position.x + width / 2.0;
+        let center_y = rect.position.y + height / 2.0;
+        self.viewport.update(|vp| {
+            vp.zoom = zoom;
+            vp.pan_x = container.width / 2.0 - center_x * zoom;
+            vp.pan_y = container.height / 2.0 - center_y * zoom;
+        });
+    }
+
+    /// Frame the whole graph — the `F` hotkey. No-op on an empty graph.
+    pub fn fit_view(&self) {
+        let Some(bounds) = self.nodes_bounds() else {
+            return;
+        };
+        let (padding, fit_max_zoom) = self
+            .config
+            .with_untracked(|c| (c.fit_padding, c.fit_max_zoom));
+        self.fit_rect(&bounds, padding, Some(fit_max_zoom));
+    }
+
     pub fn nodes_in_rect(&self, rect: &Rect) -> HashSet<N> {
         self.nodes.with_untracked(|nodes| {
             nodes

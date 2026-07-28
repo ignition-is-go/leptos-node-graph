@@ -170,6 +170,16 @@ pub struct EditorConfig {
     pub max_zoom: f64,
     pub grid_size: Option<f64>,
     pub layout_mode: LayoutMode,
+    /// Screen-pixel inset left around the graph when framing it (the `F` key).
+    pub fit_padding: f64,
+    /// Zoom ceiling when framing. Separate from `max_zoom` so that framing a
+    /// small graph fills the pane at a sane size instead of magnifying it —
+    /// framing may always zoom OUT as far as `min_zoom`.
+    pub fit_max_zoom: f64,
+    /// How close (in SCREEN pixels, so the pull feels the same at any zoom) the
+    /// cursor must come to a compatible port before a draft connection snaps to
+    /// it. `0.0` disables snapping.
+    pub snap_distance: f64,
 }
 
 impl Default for EditorConfig {
@@ -179,6 +189,9 @@ impl Default for EditorConfig {
             max_zoom: 5.0,
             grid_size: None,
             layout_mode: LayoutMode::Classic,
+            fit_padding: 48.0,
+            fit_max_zoom: 1.0,
+            snap_distance: 22.0,
         }
     }
 }
@@ -224,4 +237,9 @@ pub struct DraftConnection<P: PortId, T: PortType> {
     pub current_end: Position,
     /// The direction of the port where the drag started.
     pub origin_direction: PortDirection,
+    /// Compatible port the draft is currently snapped to, if the cursor is
+    /// within `EditorConfig::snap_distance` of one. `current_end` sits exactly on
+    /// that port while this is set, and releasing completes the connection to it
+    /// — so the wire never appears attached to something it wouldn't connect to.
+    pub snap_target: Option<P>,
 }

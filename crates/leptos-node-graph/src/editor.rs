@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
-use leptos_use::{use_debounce_fn, use_element_size, use_event_listener, UseElementSizeReturn};
+use leptos_use::{UseElementSizeReturn, use_debounce_fn, use_element_size, use_event_listener};
 
 use crate::connection::ConnectionRenderer;
 use crate::group::GroupBoxOverlay;
@@ -49,12 +49,26 @@ where
     // visible viewport (used to cull the expensive live content of off-screen
     // nodes while keeping them mounted — their ports stay registered so wires
     // are unaffected).
-    let UseElementSizeReturn { width: cont_w, height: cont_h } = use_element_size(container_ref);
+    // Measured from the DOM on mount, with the observer driving later changes.
+    // The observer's first callback only arrives a frame after mount (and not at
+    // all while the tab is hidden and the browser throttles it), which would
+    // otherwise leave framing (`F`) and viewport culling working off a 0x0
+    // container until the first resize.
+    let UseElementSizeReturn {
+        width: cont_w,
+        height: cont_h,
+    } = use_element_size(container_ref);
     let reg_cs = registry.clone();
     Effect::new(move || {
-        reg_cs
-            .container_size
-            .set(Size::new(cont_w.get(), cont_h.get()));
+        let (obs_w, obs_h) = (cont_w.get(), cont_h.get());
+        if let Some(el) = container_ref.get() {
+            let (w, h) = (el.offset_width() as f64, el.offset_height() as f64);
+            if w > 0.0 || h > 0.0 {
+                reg_cs.container_size.set(Size::new(w, h));
+                return;
+            }
+        }
+        reg_cs.container_size.set(Size::new(obs_w, obs_h));
     });
 
     // Debounce viewport → visibility_viewport so node visibility (and thus the
@@ -243,6 +257,14 @@ where
         });
     });
 
+    // Mirror the menu's open state onto the registry so the interaction handlers
+    // can see it. `menu_open_at` stays the single source of truth; this is the
+    // read path for code that only has the registry (see `menu_open`).
+    let reg_menu_open = registry.clone();
+    Effect::new(move || {
+        reg_menu_open.menu_open.set(menu_open_at.get().is_some());
+    });
+
     // Draft context for the menu (drives port sub-item visibility + type filtering)
     let reg_draft = registry.clone();
     let compat_cb = Callback::new(|(src, tgt): (String, String)| T::compatible_by_id(&src, &tgt));
@@ -274,6 +296,31 @@ where
         )
     };
 
+    // Mount point for node-anchored overlays (see overlay.rs).
+    let overlay_ref = NodeRef::<leptos::html::Div>::new();
+    provide_context(crate::overlay::NodeOverlayLayer {
+        mount: overlay_ref,
+        viewport: registry.viewport.into(),
+    });
+
+    // A fast drag or resize can outrun the node and leave the pointer over empty
+    // canvas — hold the gesture's cursor for its whole duration.
+    let reg_cursor = registry.clone();
+    let node_style_ctx = use_context::<crate::theme::NodeStyle>().unwrap_or_default();
+    let (cursor_dragging, cursor_resize) =
+        (node_style_ctx.cursor_dragging, node_style_ctx.cursor_resize);
+    let container_style = move || {
+        let base =
+            "position: relative; width: 100%; height: 100%; overflow: hidden; outline: none;";
+        if reg_cursor.resize_state.with(|rs| rs.is_some()) {
+            format!("{base} cursor: {cursor_resize};")
+        } else if reg_cursor.drag_state.with(|ds| ds.is_some()) {
+            format!("{base} cursor: {cursor_dragging};")
+        } else {
+            base.to_string()
+        }
+    };
+
     // Menu items (use empty vec if not provided)
     let menu_items_signal = menu_items.unwrap_or_else(|| Signal::derive(std::vec::Vec::new));
 
@@ -303,7 +350,7 @@ where
             class="node-editor"
             tabindex="0"
             node_ref=container_ref
-            style="position: relative; width: 100%; height: 100%; overflow: hidden; outline: none;"
+            style=container_style
             on:mousedown=on_mousedown
             on:wheel=on_wheel
             on:keydown=on_keydown
@@ -315,6 +362,15 @@ where
                 {children()}
             </div>
             <SelectionBox<N, P, C, T> />
+            // Overlay layer: inside the pane but OUTSIDE the canvas transform,
+            // so node-anchored panels are unscaled and positioned in pane space,
+            // and are clipped by the graph rather than escaping to the document.
+            <div
+                class="node-editor__overlays"
+                node_ref=overlay_ref
+                style="position: absolute; inset: 0; overflow: hidden; \
+                       pointer-events: none; isolation: isolate;"
+            />
         </div>
         <NodeMenu
             items=menu_items_signal

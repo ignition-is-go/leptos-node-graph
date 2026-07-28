@@ -25,7 +25,8 @@ fn render_port<T: PortType>(
     let marker: PhantomData<(String, String)> = PhantomData;
 
     // Resolve slot: per-port > global type > default label
-    let slot_content = port_slots.get(&port.id)
+    let slot_content = port_slots
+        .get(&port.id)
         .map(|s| s(port.label.clone()))
         .or_else(|| {
             let key = (port.port_type.type_id(), port.direction);
@@ -37,14 +38,16 @@ fn render_port<T: PortType>(
             view! { <InputAnchor id=port_id port_type=port_type _marker=marker>{content}</InputAnchor> }.into_any()
         } else {
             let lbl = port.label.clone();
-            view! { <InputAnchor id=port_id port_type=port_type _marker=marker label=lbl /> }.into_any()
+            view! { <InputAnchor id=port_id port_type=port_type _marker=marker label=lbl /> }
+                .into_any()
         }
     } else {
         if let Some(content) = slot_content {
             view! { <OutputAnchor id=port_id port_type=port_type _marker=marker>{content}</OutputAnchor> }.into_any()
         } else {
             let lbl = port.label.clone();
-            view! { <OutputAnchor id=port_id port_type=port_type _marker=marker label=lbl /> }.into_any()
+            view! { <OutputAnchor id=port_id port_type=port_type _marker=marker label=lbl /> }
+                .into_any()
         }
     }
 }
@@ -57,7 +60,11 @@ type DynamicPortsFn<T> = Arc<dyn Fn(String) -> Signal<Vec<TypedPort<T>>> + Send 
 type CustomRendererFn = Arc<dyn Fn(String, RwSignal<Position>) -> AnyView + Send + Sync>;
 
 /// Internal renderer: (node_id, position, global_port_type_slots, header_renderer) -> AnyView.
-type RendererFn = Arc<dyn Fn(String, RwSignal<Position>, &PortTypeSlots, &Option<HeaderRenderer>) -> AnyView + Send + Sync>;
+type RendererFn = Arc<
+    dyn Fn(String, RwSignal<Position>, &PortTypeSlots, &Option<HeaderRenderer>) -> AnyView
+        + Send
+        + Sync,
+>;
 
 pub struct NodeTypeBuilder<T: PortType> {
     typed_def: TypedNodeDef<T>,
@@ -96,26 +103,39 @@ impl<T: PortType> NodeTypeBuilder<T> {
     /// Set dynamic input ports — a function called per node instance that returns
     /// a reactive signal of ports. Ports are re-rendered when the signal changes.
     /// Static ports from the TypedNodeDef are rendered first, dynamic ones after.
-    pub fn dynamic_inputs(mut self, f: impl Fn(String) -> Signal<Vec<TypedPort<T>>> + Send + Sync + 'static) -> Self {
+    pub fn dynamic_inputs(
+        mut self,
+        f: impl Fn(String) -> Signal<Vec<TypedPort<T>>> + Send + Sync + 'static,
+    ) -> Self {
         self.dynamic_inputs = Some(Arc::new(f));
         self
     }
 
     /// Set dynamic output ports — same as dynamic_inputs but for outputs.
-    pub fn dynamic_outputs(mut self, f: impl Fn(String) -> Signal<Vec<TypedPort<T>>> + Send + Sync + 'static) -> Self {
+    pub fn dynamic_outputs(
+        mut self,
+        f: impl Fn(String) -> Signal<Vec<TypedPort<T>>> + Send + Sync + 'static,
+    ) -> Self {
         self.dynamic_outputs = Some(Arc::new(f));
         self
     }
 
     /// Override a specific port's content. The function receives the port label.
-    pub fn port_slot(mut self, port_id: &str, f: impl Fn(String) -> AnyView + Send + Sync + 'static) -> Self {
+    pub fn port_slot(
+        mut self,
+        port_id: &str,
+        f: impl Fn(String) -> AnyView + Send + Sync + 'static,
+    ) -> Self {
         self.port_slots.insert(port_id.to_string(), Arc::new(f));
         self
     }
 
     /// Use a fully custom renderer instead of auto-generated ports.
     /// Use this for nodes with dynamic port counts.
-    pub fn custom_renderer(mut self, f: impl Fn(String, RwSignal<Position>) -> AnyView + Send + Sync + 'static) -> Self {
+    pub fn custom_renderer(
+        mut self,
+        f: impl Fn(String, RwSignal<Position>) -> AnyView + Send + Sync + 'static,
+    ) -> Self {
         self.custom_renderer = Some(Arc::new(f));
         self
     }
@@ -139,106 +159,119 @@ impl<T: PortType> NodeTypeBuilder<T> {
         let dynamic_inputs = self.dynamic_inputs;
         let dynamic_outputs = self.dynamic_outputs;
 
-        let renderer = Arc::new(move |node_id: String, position: RwSignal<Position>, global_slots: &PortTypeSlots, header_renderer: &Option<HeaderRenderer>| {
-            let label = label.clone();
-            let typed_ports = typed_ports.clone();
-            let body = body.clone();
-            let port_slots = port_slots.clone();
-            let global_slots = global_slots.clone();
-            let dynamic_inputs = dynamic_inputs.clone();
-            let dynamic_outputs = dynamic_outputs.clone();
-            let nid = node_id.clone();
+        let renderer = Arc::new(
+            move |node_id: String,
+                  position: RwSignal<Position>,
+                  global_slots: &PortTypeSlots,
+                  header_renderer: &Option<HeaderRenderer>| {
+                let label = label.clone();
+                let typed_ports = typed_ports.clone();
+                let body = body.clone();
+                let port_slots = port_slots.clone();
+                let global_slots = global_slots.clone();
+                let dynamic_inputs = dynamic_inputs.clone();
+                let dynamic_outputs = dynamic_outputs.clone();
+                let nid = node_id.clone();
 
-            let static_inputs: Vec<TypedPort<T>> = typed_ports.iter()
-                .filter(|p| p.direction == PortDirection::Input)
-                .cloned()
-                .collect();
-            let static_outputs: Vec<TypedPort<T>> = typed_ports.iter()
-                .filter(|p| p.direction == PortDirection::Output)
-                .cloned()
-                .collect();
-
-            // Build inputs ViewFn: static ports + optional dynamic ports
-            let nid_in = nid.clone();
-            let ps1 = port_slots.clone();
-            let gs1 = global_slots.clone();
-            let dyn_in = dynamic_inputs.as_ref().map(|f| f(nid.clone()));
-            let inputs_fn = ViewFn::from(move || {
-                let mut views: Vec<AnyView> = static_inputs.iter()
-                    .map(|port| render_port::<T>(&nid_in, port, &ps1, &gs1, true))
+                let static_inputs: Vec<TypedPort<T>> = typed_ports
+                    .iter()
+                    .filter(|p| p.direction == PortDirection::Input)
+                    .cloned()
+                    .collect();
+                let static_outputs: Vec<TypedPort<T>> = typed_ports
+                    .iter()
+                    .filter(|p| p.direction == PortDirection::Output)
+                    .cloned()
                     .collect();
 
-                if let Some(ref dyn_signal) = dyn_in {
-                    for port in &dyn_signal.get() {
-                        views.push(render_port::<T>(&nid_in, port, &ps1, &gs1, true));
+                // Build inputs ViewFn: static ports + optional dynamic ports
+                let nid_in = nid.clone();
+                let ps1 = port_slots.clone();
+                let gs1 = global_slots.clone();
+                let dyn_in = dynamic_inputs.as_ref().map(|f| f(nid.clone()));
+                let inputs_fn = ViewFn::from(move || {
+                    let mut views: Vec<AnyView> = static_inputs
+                        .iter()
+                        .map(|port| render_port::<T>(&nid_in, port, &ps1, &gs1, true))
+                        .collect();
+
+                    if let Some(ref dyn_signal) = dyn_in {
+                        for port in &dyn_signal.get() {
+                            views.push(render_port::<T>(&nid_in, port, &ps1, &gs1, true));
+                        }
                     }
-                }
 
-                views.into_iter().collect_view().into_any()
-            });
-
-            let nid_out = nid.clone();
-            let ps2 = port_slots.clone();
-            let gs2 = global_slots.clone();
-            let dyn_out = dynamic_outputs.as_ref().map(|f| f(nid.clone()));
-            let outputs_fn = ViewFn::from(move || {
-                let mut views: Vec<AnyView> = static_outputs.iter()
-                    .map(|port| render_port::<T>(&nid_out, port, &ps2, &gs2, false))
-                    .collect();
-
-                if let Some(ref dyn_signal) = dyn_out {
-                    for port in &dyn_signal.get() {
-                        views.push(render_port::<T>(&nid_out, port, &ps2, &gs2, false));
-                    }
-                }
-
-                views.into_iter().collect_view().into_any()
-            });
-
-            let category = category.clone();
-            let accent = category.as_ref().and_then(|c| c.color.clone()).unwrap_or_default();
-            let custom_header = header_renderer.clone();
-            let header_content: Children = Box::new(move || {
-                if let Some(ref renderer) = custom_header {
-                    return renderer(label.clone(), category.clone());
-                }
-                // Default header: label left, colored category right
-                let cat_view = category.as_ref().map(|cat| {
-                    let color = cat.color.clone().unwrap_or_else(|| "#71717a".into());
-                    let name = cat.name.clone();
-                    let style = format!(
-                        "color: {color}; font-weight: 400; margin-left: auto; font-size: 10px;"
-                    );
-                    view! { <span style=style>{name}</span> }
+                    views.into_iter().collect_view().into_any()
                 });
-                view! {
+
+                let nid_out = nid.clone();
+                let ps2 = port_slots.clone();
+                let gs2 = global_slots.clone();
+                let dyn_out = dynamic_outputs.as_ref().map(|f| f(nid.clone()));
+                let outputs_fn = ViewFn::from(move || {
+                    let mut views: Vec<AnyView> = static_outputs
+                        .iter()
+                        .map(|port| render_port::<T>(&nid_out, port, &ps2, &gs2, false))
+                        .collect();
+
+                    if let Some(ref dyn_signal) = dyn_out {
+                        for port in &dyn_signal.get() {
+                            views.push(render_port::<T>(&nid_out, port, &ps2, &gs2, false));
+                        }
+                    }
+
+                    views.into_iter().collect_view().into_any()
+                });
+
+                let category = category.clone();
+                let accent = category
+                    .as_ref()
+                    .and_then(|c| c.color.clone())
+                    .unwrap_or_default();
+                let custom_header = header_renderer.clone();
+                let header_content: Children = Box::new(move || {
+                    if let Some(ref renderer) = custom_header {
+                        return renderer(label.clone(), category.clone());
+                    }
+                    // Default header: label left, colored category right
+                    let cat_view = category.as_ref().map(|cat| {
+                        let color = cat.color.clone().unwrap_or_else(|| "#71717a".into());
+                        let name = cat.name.clone();
+                        let style = format!(
+                            "color: {color}; font-weight: 400; margin-left: auto; font-size: 10px;"
+                        );
+                        view! { <span style=style>{name}</span> }
+                    });
+                    view! {
                     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                         <span>{label.clone()}</span>
                         {cat_view}
                     </div>
                 }.into_any()
-            });
+                });
 
-            let nid_body = node_id.clone();
-            let body_content: Children = body.map(|b| {
-                Box::new(move || b(nid_body.clone())) as Children
-            }).unwrap_or_else(|| Box::new(|| ().into_any()));
+                let nid_body = node_id.clone();
+                let body_content: Children = body
+                    .map(|b| Box::new(move || b(nid_body.clone())) as Children)
+                    .unwrap_or_else(|| Box::new(|| ().into_any()));
 
-            let node_marker: PhantomData<(String, String, T)> = PhantomData;
+                let node_marker: PhantomData<(String, String, T)> = PhantomData;
 
-            view! {
-                <Node
-                    id=node_id
-                    position=position
-                    _marker=node_marker
-                    header=header_content
-                    body=body_content
-                    inputs=inputs_fn
-                    outputs=outputs_fn
-                    accent_color=accent
-                />
-            }.into_any()
-        });
+                view! {
+                    <Node
+                        id=node_id
+                        position=position
+                        _marker=node_marker
+                        header=header_content
+                        body=body_content
+                        inputs=inputs_fn
+                        outputs=outputs_fn
+                        accent_color=accent
+                    />
+                }
+                .into_any()
+            },
+        );
 
         NodeTypeDef {
             menu_item,
@@ -275,7 +308,13 @@ impl NodeTypeDef {
     }
 
     /// Render this node type.
-    pub fn render(&self, id: String, position: RwSignal<Position>, global_slots: &PortTypeSlots, header_renderer: &Option<HeaderRenderer>) -> AnyView {
+    pub fn render(
+        &self,
+        id: String,
+        position: RwSignal<Position>,
+        global_slots: &PortTypeSlots,
+        header_renderer: &Option<HeaderRenderer>,
+    ) -> AnyView {
         (self.renderer)(id, position, global_slots, header_renderer)
     }
 }
@@ -313,10 +352,8 @@ impl NodeTypeRegistry {
         direction: PortDirection,
         f: impl Fn(String) -> AnyView + Send + Sync + 'static,
     ) {
-        self.port_type_slots.insert(
-            (port_type.type_id(), direction),
-            Arc::new(f),
-        );
+        self.port_type_slots
+            .insert((port_type.type_id(), direction), Arc::new(f));
     }
 
     pub fn register(&mut self, def: NodeTypeDef) {
@@ -326,13 +363,26 @@ impl NodeTypeRegistry {
     }
 
     pub fn menu_items(&self) -> Vec<NodeMenuItem> {
-        self.order.iter()
+        self.order
+            .iter()
             .filter_map(|id| self.types.get(id).map(|d| d.menu_item.clone()))
             .collect()
     }
 
-    pub fn render(&self, type_id: &str, node_id: String, position: RwSignal<Position>) -> Option<AnyView> {
-        self.types.get(type_id).map(|def| def.render(node_id, position, &self.port_type_slots, &self.header_renderer))
+    pub fn render(
+        &self,
+        type_id: &str,
+        node_id: String,
+        position: RwSignal<Position>,
+    ) -> Option<AnyView> {
+        self.types.get(type_id).map(|def| {
+            def.render(
+                node_id,
+                position,
+                &self.port_type_slots,
+                &self.header_renderer,
+            )
+        })
     }
 
     pub fn get(&self, type_id: &str) -> Option<&NodeTypeDef> {

@@ -136,13 +136,14 @@ where
                         for group in &current_groups {
                             if let Some(bounds) =
                                 compute_bounds(&group.node_ids, &nodes_map, padding)
-                                && bounds.contains(center) {
-                                    on_ev.run(GroupEvent::NodeAdded {
-                                        group_id: group.id.clone(),
-                                        node_id: node_id.clone(),
-                                    });
-                                    break;
-                                }
+                                && bounds.contains(center)
+                            {
+                                on_ev.run(GroupEvent::NodeAdded {
+                                    group_id: group.id.clone(),
+                                    node_id: node_id.clone(),
+                                });
+                                break;
+                            }
                         }
                     }
                 }
@@ -168,10 +169,11 @@ where
                     let mut found = None;
                     for group in &current_groups {
                         if let Some(bounds) = compute_bounds(&group.node_ids, &all_nodes, padding)
-                            && bounds.contains(center) {
-                                found = Some(group.id.clone());
-                                break;
-                            }
+                            && bounds.contains(center)
+                        {
+                            found = Some(group.id.clone());
+                            break;
+                        }
                     }
                     hover_group.set(found);
                 }
@@ -321,10 +323,11 @@ fn GroupLabel<N: NodeId>(
     // Focus input when entering edit mode
     Effect::new(move || {
         if editing.get()
-            && let Some(el) = input_ref.get() {
-                let _ = el.focus();
-                el.select();
-            }
+            && let Some(el) = input_ref.get()
+        {
+            let _ = el.focus();
+            el.select();
+        }
     });
 
     move || {

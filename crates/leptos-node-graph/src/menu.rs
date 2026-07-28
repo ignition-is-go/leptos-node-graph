@@ -26,11 +26,17 @@ pub struct Category {
 
 impl Category {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), color: None }
+        Self {
+            name: name.into(),
+            color: None,
+        }
     }
 
     pub fn with_color(name: impl Into<String>, color: impl Into<String>) -> Self {
-        Self { name: name.into(), color: Some(color.into()) }
+        Self {
+            name: name.into(),
+            color: Some(color.into()),
+        }
     }
 }
 
@@ -61,11 +67,21 @@ pub struct TypedPort<T: PortType> {
 
 impl<T: PortType> TypedPort<T> {
     pub fn input(id: impl Into<String>, label: impl Into<String>, port_type: T) -> Self {
-        Self { id: id.into(), label: label.into(), direction: PortDirection::Input, port_type }
+        Self {
+            id: id.into(),
+            label: label.into(),
+            direction: PortDirection::Input,
+            port_type,
+        }
     }
 
     pub fn output(id: impl Into<String>, label: impl Into<String>, port_type: T) -> Self {
-        Self { id: id.into(), label: label.into(), direction: PortDirection::Output, port_type }
+        Self {
+            id: id.into(),
+            label: label.into(),
+            direction: PortDirection::Output,
+            port_type,
+        }
     }
 
     /// Convert to a type-erased MenuPort for the menu UI.
@@ -165,14 +181,12 @@ pub fn NodeMenu(
     let ms = use_context::<NodeMenuStyle>().unwrap_or_default();
     let input_ref = NodeRef::<leptos::html::Input>::new();
     let (selected_index, set_selected_index) = signal(0usize);
-    let (hovered_port, set_hovered_port) = signal(Option::<(usize, String)>::None);
 
     // Focus input when menu opens
     Effect::new(move || {
         if open_at.get().is_some() {
             search_text.set(String::new());
             set_selected_index.set(0);
-            set_hovered_port.set(None);
             request_animation_frame(move || {
                 if let Some(el) = input_ref.get_untracked() {
                     let _ = el.focus();
@@ -193,14 +207,61 @@ pub fn NodeMenu(
             if let Some(target) = ev.target() {
                 use leptos::wasm_bindgen::JsCast;
                 if let Some(el) = target.dyn_ref::<web_sys::Element>()
-                    && el.closest("[data-node-menu]").ok().flatten().is_some() {
-                        return;
-                    }
+                    && el.closest("[data-node-menu]").ok().flatten().is_some()
+                {
+                    return;
+                }
             }
             open_at.set(None);
             on_event_close.run(NodeMenuEvent::Cancelled);
         },
     );
+
+    // The node types on screen: during a draft, only those with a port that
+    // could accept the connection.
+    //
+    // Derived HERE rather than inline in the view because keyboard nav, Enter,
+    // and rendering must agree. While the filter lived only in the view,
+    // arrowing walked the UNFILTERED count — the highlight ran off the end of
+    // the visible rows and stuck there — and Enter resolved that index against
+    // the unfiltered list, creating the wrong node.
+    let visible_items = Signal::derive(move || {
+        let all = items.get();
+        let Some(dc) = draft_context.get() else {
+            return all;
+        };
+        all.into_iter()
+            .filter(|item| !compatible_ports(item, &dc).is_empty())
+            .collect()
+    });
+
+    // What the selection actually walks. While a connection is in flight you are
+    // choosing a PIN, not a node — so a node offering two compatible ports
+    // contributes two entries and the arrows step pin by pin. With no draft (or
+    // a single compatible port, where the node row is unambiguous) it stays one
+    // entry per node.
+    let visible_entries = Signal::derive(move || {
+        let all = items.get();
+        let Some(dc) = draft_context.get() else {
+            return all
+                .into_iter()
+                .map(|item| (item, None))
+                .collect::<Vec<(NodeMenuItem, Option<String>)>>();
+        };
+        all.into_iter()
+            .flat_map(|item| {
+                let ports = compatible_ports(&item, &dc);
+                match ports.len() {
+                    0 => Vec::new(),
+                    1 => vec![(item, Some(ports[0].id.clone()))],
+                    _ => ports
+                        .iter()
+                        .map(|p| (item.clone(), Some(p.id.clone())))
+                        .collect(),
+                }
+            })
+            .collect()
+    });
 
     // Helper: emit create event and close menu
     let emit_create = {
@@ -222,7 +283,7 @@ pub fn NodeMenu(
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         // Stop all keyboard events from reaching the editor
         ev.stop_propagation();
-        let item_count = items.with_untracked(|items| items.len());
+        let item_count = visible_entries.with_untracked(|entries| entries.len());
 
         match ev.key().as_str() {
             "ArrowDown" => {
@@ -238,19 +299,11 @@ pub fn NodeMenu(
             "Enter" => {
                 ev.prevent_default();
                 let idx = selected_index.get_untracked();
-                let item = items.with_untracked(|items| items.get(idx).cloned());
-                if let Some(item) = item {
-                    let dc = draft_context.get_untracked();
-                    let connect_port = dc.and_then(|dc| {
-                        let target_dir = match dc.origin_direction {
-                            PortDirection::Output => PortDirection::Input,
-                            PortDirection::Input => PortDirection::Output,
-                        };
-                        item.ports
-                            .iter()
-                            .find(|p| p.direction == target_dir)
-                            .map(|p| p.id.clone())
-                    });
+                // The entry already carries the exact pin that was selected —
+                // no re-deriving "first compatible port", which would ignore
+                // which pin the user actually arrowed to.
+                let entry = visible_entries.with_untracked(|entries| entries.get(idx).cloned());
+                if let Some((item, connect_port)) = entry {
                     emit_create_key(item.id, connect_port);
                 }
             }
@@ -263,9 +316,18 @@ pub fn NodeMenu(
         }
     };
 
-    // Reset selected index when items change
+    // Keep the highlighted row visible while arrowing through the list. Effects
+    // run after the DOM patch, so the direct call is normally enough; the extra
+    // frame covers layout that settles later and is a no-op when it doesn't.
     Effect::new(move || {
-        let count = items.with(|items| items.len());
+        let _ = selected_index.get();
+        scroll_selected_into_view();
+        request_animation_frame(scroll_selected_into_view);
+    });
+
+    // Reset selected index when the entry list changes
+    Effect::new(move || {
+        let count = visible_entries.with(|entries| entries.len());
         let current = selected_index.get_untracked();
         if current >= count && count > 0 {
             set_selected_index.set(count - 1);
@@ -282,8 +344,14 @@ pub fn NodeMenu(
         let (vw, vh) = web_sys::window()
             .map(|w| {
                 (
-                    w.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1920.0),
-                    w.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(1080.0),
+                    w.inner_width()
+                        .ok()
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(1920.0),
+                    w.inner_height()
+                        .ok()
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(1080.0),
                 )
             })
             .unwrap_or((1920.0, 1080.0));
@@ -297,10 +365,9 @@ pub fn NodeMenu(
             left, top,
         );
 
-        let current_items = items.get();
+        let current_items = visible_items.get();
         let selected = selected_index.get();
         let dc = draft_context.get();
-        let hp = hovered_port.get();
 
         let panel_style = format!(
             "background: {}; border: {}; border-radius: 8px; box-shadow: {}; \
@@ -334,7 +401,7 @@ pub fn NodeMenu(
                             on:keydown=on_keydown
                         />
                     </div>
-                    <div style="overflow-y: auto; padding: 4px 0;">
+                    <div data-node-menu-list="" style="overflow-y: auto; padding: 4px 0;">
                         {if current_items.is_empty() {
                             view! {
                                 <div style=format!(
@@ -345,35 +412,31 @@ pub fn NodeMenu(
                                 </div>
                             }.into_any()
                         } else {
-                            // In draft mode, filter out items with no compatible ports
-                            let filtered_items: Vec<_> = if dc.is_some() {
-                                current_items.into_iter().filter(|item| {
-                                    let dc_ref = dc.as_ref().unwrap();
-                                    let target_dir = match dc_ref.origin_direction {
-                                        PortDirection::Output => PortDirection::Input,
-                                        PortDirection::Input => PortDirection::Output,
-                                    };
-                                    item.ports.iter().any(|p| {
-                                        if p.direction != target_dir { return false; }
-                                        let (src, tgt) = if dc_ref.origin_direction == PortDirection::Output {
-                                            (dc_ref.source_type_id.clone(), p.type_id.clone())
-                                        } else {
-                                            (p.type_id.clone(), dc_ref.source_type_id.clone())
-                                        };
-                                        dc_ref.is_compatible.run((src, tgt))
-                                    })
-                                }).collect()
-                            } else {
-                                current_items
-                            };
+                            // Tag each node with the entry index its row (or its
+                            // first pin sub-row) corresponds to, so the rendered
+                            // highlight lands on exactly what the keyboard has
+                            // selected. Must consume entries in the same order
+                            // `visible_entries` produces them.
+                            let mut rows: Vec<(NodeMenuItem, Vec<MenuPort>, usize)> = Vec::new();
+                            let mut next_entry = 0usize;
+                            for item in current_items {
+                                let ports = dc
+                                    .as_ref()
+                                    .map(|dc| compatible_ports(&item, dc))
+                                    .unwrap_or_default();
+                                let consumed = if ports.len() > 1 { ports.len() } else { 1 };
+                                rows.push((item, ports, next_entry));
+                                next_entry += consumed;
+                            }
 
                             let mut last_category: Option<String> = None; // track by name
-                            filtered_items
+                            rows
                                 .into_iter()
-                                .enumerate()
-                                .map(|(i, item)| {
-                                    let is_selected = i == selected;
-                                    let dc_inner = dc.clone();
+                                .map(|(item, compatible_ports, base_entry)| {
+                                    // A node offering several pins is never itself
+                                    // the selection — its pins are.
+                                    let has_multi_ports = compatible_ports.len() > 1;
+                                    let is_selected = !has_multi_ports && base_entry == selected;
                                     let emit = emit_create;
 
                                     // Category header
@@ -399,33 +462,7 @@ pub fn NodeMenu(
                                     let desc = item.description.clone();
                                     let item_id = item.id.clone();
 
-                                    // Compatible ports for draft mode
-                                    let target_dir = dc_inner.as_ref().map(|dc| {
-                                        match dc.origin_direction {
-                                            PortDirection::Output => PortDirection::Input,
-                                            PortDirection::Input => PortDirection::Output,
-                                        }
-                                    });
-
-                                    let compatible_ports: Vec<_> = if let (Some(dir), Some(dc)) = (target_dir, &dc_inner) {
-                                        item.ports.iter()
-                                            .filter(|p| {
-                                                if p.direction != dir { return false; }
-                                                let (src, tgt) = if dc.origin_direction == PortDirection::Output {
-                                                    (dc.source_type_id.clone(), p.type_id.clone())
-                                                } else {
-                                                    (p.type_id.clone(), dc.source_type_id.clone())
-                                                };
-                                                dc.is_compatible.run((src, tgt))
-                                            })
-                                            .cloned()
-                                            .collect()
-                                    } else {
-                                        vec![]
-                                    };
-
-                                    let has_visible_ports = compatible_ports.len() > 1;
-                                    let item_bg = if is_selected && !has_visible_ports {
+                                    let item_bg = if is_selected {
                                         format!("background: {};", ms.hover_background)
                                     } else {
                                         String::new()
@@ -447,12 +484,10 @@ pub fn NodeMenu(
                                     let emit_item = emit;
                                     let item_id_click = item_id.clone();
                                     let auto_port_click = auto_port.clone();
-                                    let has_multi_ports = compatible_ports.len() > 1;
 
-                                    // Port sub-items (always visible inline in draft mode)
-                                    let port_views = if compatible_ports.len() > 1 {
-                                        let hp = hp.clone();
-                                        let ports_html: Vec<_> = compatible_ports.into_iter().map(|port| {
+                                    // Pin sub-rows, each its own selectable entry.
+                                    let port_views = if has_multi_ports {
+                                        let ports_html: Vec<_> = compatible_ports.into_iter().enumerate().map(|(j, port)| {
                                             let emit_port = emit;
                                             let iid = item_id.clone();
                                             let pid = port.id.clone();
@@ -462,10 +497,12 @@ pub fn NodeMenu(
                                             };
                                             let pid_click = pid.clone();
                                             let iid_click = iid.clone();
-                                            let pid_hover = pid.clone();
-                                            let hover_key = (i, pid.clone());
-                                            let is_port_hovered = hp.as_ref() == Some(&hover_key);
-                                            let port_bg = if is_port_hovered {
+                                            // Keyboard and mouse drive the SAME
+                                            // selection, so a pin highlights the
+                                            // same way however you reached it.
+                                            let entry_idx = base_entry + j;
+                                            let is_port_selected = entry_idx == selected;
+                                            let port_bg = if is_port_selected {
                                                 format!("background: {};", ms.hover_background)
                                             } else {
                                                 String::new()
@@ -476,6 +513,7 @@ pub fn NodeMenu(
                                             );
                                             view! {
                                                 <div
+                                                    data-menu-item-selected=is_port_selected.then_some("")
                                                     style=port_style
                                                     on:pointerup=move |ev: web_sys::PointerEvent| {
                                                         ev.stop_propagation();
@@ -483,10 +521,7 @@ pub fn NodeMenu(
                                                         emit_port(iid_click.clone(), Some(pid_click.clone()));
                                                     }
                                                     on:mouseenter=move |_| {
-                                                        set_hovered_port.set(Some((i, pid_hover.clone())));
-                                                    }
-                                                    on:mouseleave=move |_| {
-                                                        set_hovered_port.set(None);
+                                                        set_selected_index.set(entry_idx);
                                                     }
                                                 >
                                                     {dir_icon}{port.label}
@@ -501,6 +536,7 @@ pub fn NodeMenu(
                                     view! {
                                         {cat_header}
                                         <div
+                                            data-menu-item-selected=is_selected.then_some("")
                                             style=item_style
                                             on:pointerup=move |ev: web_sys::PointerEvent| {
                                                 ev.stop_propagation();
@@ -508,7 +544,9 @@ pub fn NodeMenu(
                                                 emit_item(item_id_click.clone(), auto_port_click.clone());
                                             }
                                             on:mouseenter=move |_| {
-                                                set_selected_index.set(i);
+                                                if !has_multi_ports {
+                                                    set_selected_index.set(base_entry);
+                                                }
                                             }
                                         >
                                             {item.label}
@@ -529,6 +567,64 @@ pub fn NodeMenu(
             </div>
         })
     }
+}
+
+/// The ports on `item` that could accept the in-flight draft connection.
+///
+/// Single source of truth for "what is compatible": the visible node list, the
+/// pin entries the keyboard walks, and the rendered sub-rows all call this, so
+/// they cannot drift apart.
+fn compatible_ports(item: &NodeMenuItem, dc: &DraftContext) -> Vec<MenuPort> {
+    let target_dir = match dc.origin_direction {
+        PortDirection::Output => PortDirection::Input,
+        PortDirection::Input => PortDirection::Output,
+    };
+    item.ports
+        .iter()
+        .filter(|p| {
+            if p.direction != target_dir {
+                return false;
+            }
+            let (src, tgt) = if dc.origin_direction == PortDirection::Output {
+                (dc.source_type_id.clone(), p.type_id.clone())
+            } else {
+                (p.type_id.clone(), dc.source_type_id.clone())
+            };
+            dc.is_compatible.run((src, tgt))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Scroll the highlighted row just far enough to be fully visible — the same
+/// behavior as `scrollIntoView({block: "nearest"})`, done with client rects so
+/// it needs neither a positioned `offsetParent` nor web-sys's
+/// `ScrollIntoViewOptions` feature. A row that's already visible doesn't move,
+/// which is what keeps mouse hover (which also sets the selection) from
+/// scrolling the list under the cursor.
+fn scroll_selected_into_view() {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Ok(Some(list)) = doc.query_selector("[data-node-menu] [data-node-menu-list]") else {
+        return;
+    };
+    let Ok(Some(item)) =
+        doc.query_selector("[data-node-menu] [data-node-menu-list] [data-menu-item-selected]")
+    else {
+        return;
+    };
+
+    let lr = list.get_bounding_client_rect();
+    let ir = item.get_bounding_client_rect();
+    let delta = if ir.top() < lr.top() {
+        ir.top() - lr.top()
+    } else if ir.bottom() > lr.bottom() {
+        ir.bottom() - lr.bottom()
+    } else {
+        return;
+    };
+    list.set_scroll_top((list.scroll_top() as f64 + delta).round() as i32);
 }
 
 fn request_animation_frame(f: impl FnOnce() + 'static) {
