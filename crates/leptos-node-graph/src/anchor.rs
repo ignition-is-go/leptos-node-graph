@@ -735,15 +735,42 @@ where
         )
     };
 
-    // Tooltip — uses fixed positioning to escape node's overflow:hidden
+    // Tooltip.
+    //
+    // PORTALLED to the body, for the same reason as the context menu below: the
+    // dot lives inside a node card under the canvas `transform`, and a transformed
+    // ancestor is the containing block for `position: fixed`, so an in-place
+    // tooltip is displaced by the pan and scaled by the zoom.
+    //
+    // It is also anchored to the DOT, not to the pointer. The old code stored the
+    // mouseenter client coords once, which meant pan/zoom slid the dot out from
+    // under a stationary cursor while the tooltip stayed put. Measuring the dot
+    // each time the viewport changes is what actually makes it stick.
     let (dot_hovered, set_dot_hovered) = signal(false);
-    let (mouse_pos, set_mouse_pos) = signal(Position::new(0.0, 0.0));
+    let tooltip_pos = RwSignal::new(Position::new(0.0, 0.0));
+    let reg_tip = registry.clone();
+    Effect::new(move || {
+        if !dot_hovered.get() {
+            return;
+        }
+        // Subscribe to the transform: a pan or zoom moves the dot in client space
+        // without any mouse event firing. Leptos applies DOM updates before the
+        // effect phase, so the rect we read here already reflects this frame.
+        let _ = reg_tip.viewport.get();
+        if let Some(el) = dot_ref.get() {
+            let r = el.get_bounding_client_rect();
+            // Anchor to the edge the tooltip grows away from, so the 12px gap is
+            // measured from the dot itself at any zoom.
+            let x = if is_output { r.left() } else { r.right() };
+            tooltip_pos.set(Position::new(x, r.top() + r.height() / 2.0));
+        }
+    });
     let tooltip_style_cfg = use_context::<crate::theme::AnchorStyle>().unwrap_or_default();
     let tooltip_view = move || {
         if !dot_hovered.get() {
             return None;
         }
-        let mp = mouse_pos.get();
+        let tp = tooltip_pos.get();
         // For output dots, tooltip appears to the left; for input, to the right
         let offset_x = if is_output { -12.0 } else { 12.0 };
         let transform = if is_output {
@@ -756,13 +783,20 @@ where
              background: {}; border: {}; border-radius: 4px; \
              padding: 2px 6px; font-size: 10px; color: {}; white-space: nowrap; \
              pointer-events: none; z-index: 10000;",
-            mp.x + offset_x,
-            mp.y,
+            tp.x + offset_x,
+            tp.y,
             tooltip_style_cfg.tooltip_background,
             tooltip_style_cfg.tooltip_border,
             tooltip_style_cfg.tooltip_color,
         );
-        Some(view! { <div style=style>{type_label2.clone()}</div> })
+        // `Portal` children are a `ChildrenFn`, so everything the markup uses has
+        // to be cloned per call rather than moved.
+        let label = type_label2.clone();
+        Some(view! {
+          <leptos::portal::Portal>
+            <div style=style.clone() data-anchor-tooltip="">{label.clone()}</div>
+          </leptos::portal::Portal>
+        })
     };
 
     // Content: children override the label
@@ -781,8 +815,7 @@ where
     // containing block for `position: fixed` descendants, so an in-place menu is
     // offset by the pan/zoom AND clipped by the node's `overflow: hidden` — it
     // renders, in the DOM, invisibly in the wrong place. Out at the body, the
-    // event's client coords mean what they say. (The tooltip above has the same
-    // bug in miniature; it's cosmetic and stays for now.)
+    // event's client coords mean what they say.
     let ms = use_context::<crate::theme::NodeMenuStyle>().unwrap_or_default();
     let ctx_menu_view = move || {
         let pos = ctx_menu_pos.get()?;
@@ -839,10 +872,7 @@ where
         >
             <div
                 style="display: inline-flex;"
-                on:mouseenter=move |ev: web_sys::MouseEvent| {
-                    set_dot_hovered.set(true);
-                    set_mouse_pos.set(Position::new(ev.client_x() as f64, ev.client_y() as f64));
-                }
+                on:mouseenter=move |_| set_dot_hovered.set(true)
                 on:mouseleave=move |_| set_dot_hovered.set(false)
             >
                 <div style=dot_box_style node_ref=dot_ref data-anchor-dot="">
