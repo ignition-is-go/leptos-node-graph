@@ -121,6 +121,12 @@ fn App() -> impl IntoView {
     // `position.get_untracked()` panics on a disposed signal.
     let app_owner = Owner::current().expect("app component has an owner");
 
+    // Handed to the editor below; lets the wrapper's drop handler convert the
+    // drop's client coords into canvas coords under any pan/zoom.
+    let handle = EditorHandle::new();
+    let drop_registry = node_registry.clone();
+    let drop_owner = app_owner.clone();
+
     let on_event = {
         let node_registry = node_registry.clone();
         Callback::new(move |event: GraphEvent<String, String, String>| {
@@ -268,10 +274,45 @@ fn App() -> impl IntoView {
 
     view! {
         <style>"html, body { margin: 0; padding: 0; background: #18181b; color-scheme: dark; }"</style>
-        <div style="width: 100vw; height: 100vh; overflow: hidden; \
+        <div
+            data-drop-target=""
+            style="width: 100vw; height: 100vh; overflow: hidden; \
                      font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; \
-                     font-size: 13px; color: #d4d4d8; box-sizing: border-box;">
+                     font-size: 13px; color: #d4d4d8; box-sizing: border-box;"
+            // Drop handling lives on the WRAPPER, outside the editor, which is
+            // where a cross-pane drag has to be caught. The editor's context
+            // isn't reachable from here — `EditorHandle` is.
+            on:dragover=|ev: web_sys::DragEvent| ev.prevent_default()
+            on:drop=move |ev: web_sys::DragEvent| {
+                ev.prevent_default();
+                let item_id = ev
+                    .data_transfer()
+                    .and_then(|dt| dt.get_data("text/plain").ok())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "color_source".to_string());
+                let Some(position) = handle
+                    .client_to_canvas(ev.client_x() as f64, ev.client_y() as f64)
+                else {
+                    return;
+                };
+                let node_id = next_id(&item_id);
+                let cat = drop_registry
+                    .get(&item_id)
+                    .and_then(|def| def.menu_item.category.clone());
+                let position_signal = drop_owner.with(|| RwSignal::new(position));
+                nodes
+                    .update(|ns| {
+                        ns.push(DynNode {
+                            id: node_id,
+                            node_type: item_id,
+                            position: position_signal,
+                            category: cat,
+                        });
+                    });
+            }
+        >
             <NodeEditor
+                handle=handle
                 config={EditorConfig::default()}
                 connections=connections_signal
                 on_event=on_event

@@ -22,7 +22,7 @@ pub use anchor::{
     InputAnchor, OutputAnchor,
 };
 pub use connection::{ConnectionStyle, RoutingMode};
-pub use editor::NodeEditor;
+pub use editor::{EditorHandle, NodeEditor};
 pub use group::{GroupBounds, GroupBox, GroupBoxOverlay, GroupEvent};
 pub use history::UndoHistory;
 pub use layout::{LayoutEngine, LayoutGraph};

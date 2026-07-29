@@ -12,6 +12,98 @@ use crate::registry::{ConnectionEntry, EditorRegistry};
 use crate::selection::SelectionBox;
 use crate::types::*;
 
+/// A consumer-side handle to a [`NodeEditor`] instance.
+///
+/// The editor provides its registry via context, which flows DOWN — so a handler
+/// mounted on an ancestor of the editor (an HTML5 drop target wrapping the graph,
+/// a toolbar, a sibling pane) has no way to reach the live pan/zoom transform.
+/// Construct a handle, pass it to [`NodeEditor`], and it works from anywhere:
+///
+/// ```ignore
+/// let handle = EditorHandle::new();
+/// view! {
+///     <div
+///         on:dragover=|ev: web_sys::DragEvent| ev.prevent_default()
+///         on:drop=move |ev: web_sys::DragEvent| {
+///             ev.prevent_default();
+///             if let Some(pos) = handle.client_to_canvas(ev.client_x() as f64, ev.client_y() as f64) {
+///                 // `pos` is in canvas space, correct under any pan/zoom.
+///             }
+///         }
+///     >
+///         <NodeEditor handle=handle ...>...</NodeEditor>
+///     </div>
+/// }
+/// ```
+///
+/// Prefer this over reading the canvas element's CSS transform: the class names
+/// and the transform's representation are internal and may change, whereas this
+/// is the supported surface.
+#[derive(Clone, Copy, Debug)]
+pub struct EditorHandle {
+    viewport: RwSignal<ViewportTransform>,
+    container: NodeRef<leptos::html::Div>,
+}
+
+impl Default for EditorHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EditorHandle {
+    pub fn new() -> Self {
+        Self {
+            viewport: RwSignal::new(ViewportTransform::default()),
+            container: NodeRef::new(),
+        }
+    }
+
+    /// The editor's live pan/zoom transform. Reading this in a reactive context
+    /// subscribes to it, so it also drives consumer-side minimaps, zoom readouts
+    /// and "frame the graph" controls.
+    ///
+    /// When this handle is passed to a [`NodeEditor`], the editor uses THIS
+    /// signal as its own — writing to it pans/zooms the graph.
+    pub fn viewport(&self) -> RwSignal<ViewportTransform> {
+        self.viewport
+    }
+
+    /// The editor's container element, once mounted.
+    pub fn container(&self) -> NodeRef<leptos::html::Div> {
+        self.container
+    }
+
+    /// Convert viewport client coordinates — `MouseEvent`/`DragEvent` `client_x`
+    /// and `client_y` — into canvas coordinates.
+    ///
+    /// This subtracts the container's own offset before applying the transform,
+    /// which is the step that's easy to miss: any padding, border or chrome
+    /// between the event's target and the editor's container shifts the result,
+    /// and the error only shows up once the layout gains that spacing.
+    ///
+    /// `None` before the editor has mounted. Reads are untracked, so this is safe
+    /// to call from event handlers without creating a subscription.
+    pub fn client_to_canvas(&self, client_x: f64, client_y: f64) -> Option<Position> {
+        let el = self.container.get_untracked()?;
+        let rect = el.get_bounding_client_rect();
+        Some(
+            self.viewport
+                .get_untracked()
+                .screen_to_canvas(Position::new(client_x - rect.left(), client_y - rect.top())),
+        )
+    }
+
+    /// Inverse of [`Self::client_to_canvas`]: canvas coordinates to viewport
+    /// client coordinates, for placing consumer-owned DOM over a graph position.
+    pub fn canvas_to_client(&self, canvas: Position) -> Option<Position> {
+        let el = self.container.get_untracked()?;
+        let rect = el.get_bounding_client_rect();
+        let s = self.viewport.get_untracked().canvas_to_screen(canvas);
+        Some(Position::new(s.x + rect.left(), s.y + rect.top()))
+    }
+}
+
 #[component]
 pub fn NodeEditor<N, P, C, T>(
     #[prop(into)] config: EditorConfig,
@@ -32,6 +124,11 @@ pub fn NodeEditor<N, P, C, T>(
     /// Callback for group events (rename, add/remove node).
     #[prop(optional, into)]
     on_group_event: Option<Callback<crate::group::GroupEvent<N>>>,
+    /// Optional consumer-owned handle. Gives code OUTSIDE the editor — a wrapping
+    /// drop target, a toolbar, a minimap — access to the live viewport and to
+    /// client/canvas coordinate conversion. See [`EditorHandle`].
+    #[prop(optional)]
+    handle: Option<EditorHandle>,
     children: Children,
 ) -> impl IntoView
 where
@@ -40,10 +137,16 @@ where
     C: ConnectionId,
     T: PortType,
 {
-    let registry = EditorRegistry::<N, P, C, T>::new(config, on_event);
+    // A handle owns the viewport signal and the container ref outright, rather
+    // than being kept in sync with internal copies — two-way mirroring of a
+    // signal that both sides write is a feedback loop waiting to happen.
+    let mut registry = EditorRegistry::<N, P, C, T>::new(config, on_event);
+    if let Some(h) = handle {
+        registry.viewport = h.viewport;
+    }
     provide_context(registry.clone());
 
-    let container_ref = NodeRef::<leptos::html::Div>::new();
+    let container_ref = handle.map(|h| h.container).unwrap_or_default();
 
     // Measure the container so each node can compute whether it's within the
     // visible viewport (used to cull the expensive live content of off-screen
