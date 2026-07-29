@@ -11,6 +11,52 @@ struct CustomPortCounts {
     outputs: Signal<usize>,
 }
 
+/// Provided by the Mix node's body and read from INSIDE its `NodeOverlay` — the
+/// overlay is portalled to the pane, so this also demonstrates that a node
+/// body's reactive context reaches its overlay content.
+#[derive(Clone, Copy)]
+struct BlendMix {
+    amount: RwSignal<f64>,
+}
+
+
+/// Overlay content for the Mix node. Rendered at the graph-pane level, but it
+/// still resolves `BlendMix` from the node body that opened it.
+#[component]
+fn MixAmountPanel() -> impl IntoView {
+    let mix = use_context::<BlendMix>();
+    view! {
+        <div
+            data-mix-panel=""
+            style="background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; \
+                   box-shadow: 0 8px 24px rgba(0,0,0,0.5); padding: 10px; \
+                   display: flex; flex-direction: column; gap: 8px;"
+        >
+            <div style="font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: #a1a1aa;">
+                "Mix amount"
+            </div>
+            {match mix {
+                Some(mix) => view! {
+                    <input
+                        type="range" min="0" max="1" step="0.01"
+                        prop:value=move || mix.amount.get().to_string()
+                        on:input=move |ev| {
+                            if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                                mix.amount.set(v);
+                            }
+                        }
+                    />
+                    <div data-mix-value="" style="font-size: 11px; color: #d4d4d8;">
+                        {move || format!("{:.2}", mix.amount.get())}
+                    </div>
+                }.into_any(),
+                None => view! {
+                    <div style="font-size: 11px; color: #ef4444;">"context lost"</div>
+                }.into_any(),
+            }}
+        </div>
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Registry builder
@@ -40,10 +86,34 @@ pub fn build_node_registry() -> NodeTypeRegistry {
                     NodeTypeBuilder::<super::DemoPort>::new(item)
                         .body(|_node_id| {
                             let blend = RwSignal::new("Normal".to_string());
+                            // Owned by the node body, edited from inside the overlay.
+                            let mix = BlendMix { amount: RwSignal::new(0.5) };
+                            provide_context(mix);
+                            let open = RwSignal::new(false);
                             view! {
                                 <NodeField label="Blend">
                                     <Select options=options_from(&["Normal", "Multiply", "Screen", "Overlay", "Add"]) value=blend />
+                                    <button
+                                        data-curve-trigger=""
+                                        title="Edit mix amount"
+                                        style="background: #27272a; border: 1px solid #3f3f46; \
+                                               border-radius: 4px; color: #d4d4d8; font-size: 11px; \
+                                               padding: 2px 6px; cursor: pointer;"
+                                        on:click=move |_| open.update(|o| *o = !*o)
+                                    >
+                                        "✎"
+                                    </button>
                                 </NodeField>
+                                <Show when=move || open.get()>
+                                    <NodeOverlay
+                                        anchor=OverlayAnchor::Selector("[data-curve-trigger]".into())
+                                        side=OverlaySide::Right
+                                        on_dismiss=Callback::new(move |_| open.set(false))
+                                        style="width: 200px;"
+                                    >
+                                        <MixAmountPanel />
+                                    </NodeOverlay>
+                                </Show>
                             }.into_any()
                         })
                         .build()
