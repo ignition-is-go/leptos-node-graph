@@ -112,6 +112,15 @@ fn App() -> impl IntoView {
 
     let groups: RwSignal<Vec<GroupBox<String>>> = RwSignal::new(initial_groups);
 
+    // The app's reactive owner, captured so nodes created from a graph event get
+    // signals that outlive whatever transient scope raised the event.
+    //
+    // Without this, `RwSignal::new` inside the handler inherits the CALLER's
+    // owner — the node menu's view — which is disposed the moment the menu
+    // closes. The new node then renders against a dead signal and `Node`'s
+    // `position.get_untracked()` panics on a disposed signal.
+    let app_owner = Owner::current().expect("app component has an owner");
+
     let on_event = {
         let node_registry = node_registry.clone();
         Callback::new(move |event: GraphEvent<String, String, String>| {
@@ -146,11 +155,12 @@ fn App() -> impl IntoView {
                     let node_id = next_id(&item_id);
                     let cat = node_registry.get(&item_id)
                         .and_then(|def| def.menu_item.category.clone());
+                    let position_signal = app_owner.with(|| RwSignal::new(position));
                     nodes.update(|ns| {
                         ns.push(DynNode {
                             id: node_id.clone(),
                             node_type: item_id,
-                            position: RwSignal::new(position),
+                            position: position_signal,
                             category: cat,
                         });
                     });
