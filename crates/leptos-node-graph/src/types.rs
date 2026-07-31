@@ -106,9 +106,9 @@ where
     P: PortId,
     C: ConnectionId,
 {
-    NodeMoved {
-        id: N,
-        position: Position,
+    /// Final positions for every node moved by one drag gesture.
+    NodesMoved {
+        nodes: Vec<(N, Position)>,
     },
     NodeResized {
         id: N,

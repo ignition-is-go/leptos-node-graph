@@ -231,7 +231,7 @@ pub fn handle_canvas_mousemove<N, P, C, T>(
 }
 
 /// Handle a document-level mouseup. Ends box-select and node-drag (emitting
-/// `NodeMoved`), then resolves an in-flight draft connection.
+/// `NodesMoved`), then resolves an in-flight draft connection.
 ///
 /// The draft is cancelled UNLESS the mouseup landed on an anchor or the node
 /// menu: a successful connection is completed by the target anchor's own
@@ -263,22 +263,25 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
         registry.resize_state.set(None);
     }
 
-    // End node drag - emit NodeMoved events for moved nodes
+    // End node drag - emit one event containing every moved node. Consumers
+    // commonly persist graph edits as commands, so preserving the gesture
+    // boundary lets them apply a multi-selection move atomically.
     let drag = registry.drag_state.with_untracked(|ds| ds.clone());
     if let Some(drag) = drag {
         registry.drag_state.set(None);
 
-        // Emit NodeMoved for each selected node that was dragged
-        for node_id in drag.start_positions.keys() {
-            let current_pos = registry
-                .nodes
-                .with_untracked(|nodes| nodes.get(node_id).map(|n| n.position));
-            if let Some(pos) = current_pos {
-                registry.emit(GraphEvent::NodeMoved {
-                    id: node_id.clone(),
-                    position: pos,
-                });
-            }
+        let nodes: Vec<_> = registry.nodes.with_untracked(|current| {
+            drag.start_positions
+                .keys()
+                .filter_map(|node_id| {
+                    current
+                        .get(node_id)
+                        .map(|node| (node_id.clone(), node.position))
+                })
+                .collect()
+        });
+        if !nodes.is_empty() {
+            registry.emit(GraphEvent::NodesMoved { nodes });
         }
     }
 
