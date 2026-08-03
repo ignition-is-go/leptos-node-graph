@@ -617,7 +617,13 @@ where
     let as3 = as_.clone();
 
     let type_label = port_type.type_id();
-    let type_label2 = type_label.clone();
+    let tooltip_label = match (direction, label.as_deref()) {
+        (PortDirection::Output, Some(label)) if label != type_label => {
+            format!("{label} ({type_label})")
+        }
+        (PortDirection::Output, Some(label)) => label.to_string(),
+        _ => type_label,
+    };
     let is_output = direction == PortDirection::Output;
 
     // Dot: an SVG path sized to `dot_size`, so shape is a real silhouette
@@ -791,7 +797,7 @@ where
         );
         // `Portal` children are a `ChildrenFn`, so everything the markup uses has
         // to be cloned per call rather than moved.
-        let label = type_label2.clone();
+        let label = tooltip_label.clone();
         Some(view! {
           <leptos::portal::Portal>
             <div style=style.clone() data-anchor-tooltip="">{label.clone()}</div>
