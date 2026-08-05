@@ -130,6 +130,25 @@ pub fn route_intersects_rect(pts: &[Position], rect: SubwayRect, pad: f64) -> bo
     })
 }
 
+/// Diagnostic summary for a Subway batch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubwayRoutingStats {
+    pub grid_width: usize,
+    pub grid_height: usize,
+    pub grid_cells: usize,
+    pub expansions: usize,
+    pub routed: usize,
+    pub grid_fallbacks: usize,
+    pub budget_fallbacks: usize,
+    pub no_path_fallbacks: usize,
+}
+
+impl SubwayRoutingStats {
+    pub fn fallbacks(self) -> usize {
+        self.grid_fallbacks + self.budget_fallbacks + self.no_path_fallbacks
+    }
+}
+
 /// Compute orthogonal routes for all connections at once.
 ///
 /// Returns one waypoint list per connection, in input order, anchor to anchor
@@ -141,9 +160,18 @@ pub fn compute_subway_routes(
     connections: &[SubwayConnection],
     options: &SubwayOptions,
 ) -> Vec<Vec<Position>> {
+    compute_subway_routes_with_stats(rects, connections, options).0
+}
+
+pub fn compute_subway_routes_with_stats(
+    rects: &[SubwayRect],
+    connections: &[SubwayConnection],
+    options: &SubwayOptions,
+) -> (Vec<Vec<Position>>, SubwayRoutingStats) {
     let mut routes: Vec<Vec<Position>> = vec![Vec::new(); connections.len()];
+    let mut stats = SubwayRoutingStats::default();
     if connections.is_empty() {
-        return routes;
+        return (routes, stats);
     }
 
     // Unmeasured nodes (zero size) are not obstacles.
@@ -238,13 +266,17 @@ pub fn compute_subway_routes(
     let xs = dedupe_sorted(xs_raw);
     let ys = dedupe_sorted(ys_raw);
     let (nx, ny) = (xs.len(), ys.len());
+    stats.grid_width = nx;
+    stats.grid_height = ny;
+    stats.grid_cells = nx.saturating_mul(ny);
 
-    if nx < 2 || ny < 2 || nx * ny > options.max_grid_cells {
+    if nx < 2 || ny < 2 || stats.grid_cells > options.max_grid_cells {
         for j in &jobs {
             routes[j.index] = elbow_route(&j.conn, j.stub_start, j.stub_end);
         }
+        stats.grid_fallbacks = jobs.len();
         nudge_overlaps(&mut routes, options.lane_gap, &valid_rects);
-        return routes;
+        return (routes, stats);
     }
 
     // Edge blockers: h_blocked[yi * (nx-1) + xi] — the horizontal grid edge
@@ -322,6 +354,7 @@ pub fn compute_subway_routes(
         let s_key = anchor_key(j.conn.start);
         let e_key = anchor_key(j.conn.end);
 
+        let expansions_before = scratch.expansions_used;
         let mut path = None;
         if budget > 0
             && let (Some(sxi), Some(syi), Some(exi), Some(eyi)) = (sxi, syi, exi, eyi)
@@ -349,6 +382,7 @@ pub fn compute_subway_routes(
 
         match path {
             Some(path) => {
+                stats.routed += 1;
                 let mut full = Vec::with_capacity(path.len() + 2);
                 full.push(j.conn.start);
                 full.extend(path);
@@ -357,12 +391,20 @@ pub fn compute_subway_routes(
                 mark_occupancy(&mut occ, &xs, &ys, &full, s_key, e_key);
                 routes[j.index] = full;
             }
-            None => routes[j.index] = elbow_route(&j.conn, j.stub_start, j.stub_end),
+            None => {
+                if budget == 0 || scratch.expansions_used - expansions_before >= budget {
+                    stats.budget_fallbacks += 1;
+                } else {
+                    stats.no_path_fallbacks += 1;
+                }
+                routes[j.index] = elbow_route(&j.conn, j.stub_start, j.stub_end);
+            }
         }
     }
 
+    stats.expansions = scratch.expansions_used;
     nudge_overlaps(&mut routes, options.lane_gap, &valid_rects);
-    routes
+    (routes, stats)
 }
 
 struct Job {

@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use leptos::prelude::*;
 
 use crate::registry::{ConnectionEntry, EditorRegistry, NodeEntry, PortEntry};
-use crate::subway::{self, SubwayConnection, SubwayOptions, SubwayRect};
+use crate::subway::{self, SubwayConnection, SubwayOptions, SubwayRect, SubwayRoutingStats};
 use crate::types::*;
 use crate::utils;
 
@@ -45,7 +45,7 @@ fn subway_routes<N, P, C, T>(
     conns: &HashMap<C, ConnectionEntry<P, C>>,
     ports: &HashMap<P, PortEntry<N, P, T>>,
     nodes: &HashMap<N, NodeEntry<N>>,
-) -> HashMap<C, Vec<Position>>
+) -> (HashMap<C, Vec<Position>>, SubwayRoutingStats)
 where
     N: NodeId,
     P: PortId,
@@ -82,8 +82,9 @@ where
         });
     }
 
-    let routes = subway::compute_subway_routes(&rects, &inputs, &SubwayOptions::default());
-    ids.into_iter().zip(routes).collect()
+    let (routes, stats) =
+        subway::compute_subway_routes_with_stats(&rects, &inputs, &SubwayOptions::default());
+    (ids.into_iter().zip(routes).collect(), stats)
 }
 
 /// Style configuration for connections. Consumer provides this to customize appearance.
@@ -124,6 +125,7 @@ where
     let routing_mode = use_context::<RwSignal<RoutingMode>>();
     let reg2 = registry.clone();
     let style2 = style_config.clone();
+    let last_subway_stats = StoredValue::new(None::<(SubwayRoutingStats, usize, usize)>);
 
     let connections_view = move || {
         let mode = routing_mode.map(|m| m.get()).unwrap_or_default();
@@ -131,13 +133,43 @@ where
         let conns = reg.connections.get();
         let selected = reg.selected_connections.get();
         let ports = reg.ports.get();
+        let nodes = reg.nodes.get();
+        let ports_at_node_origin = ports
+            .values()
+            .filter(|port| {
+                nodes
+                    .get(&port.node_id)
+                    .is_some_and(|node| utils::distance(port.position, node.position) < 0.01)
+            })
+            .count();
         let sc = style_config.clone();
         // Orthogonal mode routes the whole batch at once (around nodes, lanes
         // separated); bezier stays a per-wire curve.
-        let routes = match mode {
-            RoutingMode::Orthogonal => subway_routes(&conns, &ports, &reg.nodes.get()),
-            RoutingMode::Bezier => HashMap::new(),
+        let (routes, stats) = match mode {
+            RoutingMode::Orthogonal => subway_routes(&conns, &ports, &nodes),
+            RoutingMode::Bezier => (HashMap::new(), SubwayRoutingStats::default()),
         };
+        let stats_signature = (stats, ports_at_node_origin, ports.len());
+        let stats_changed =
+            last_subway_stats.with_value(|previous| *previous != Some(stats_signature));
+        if stats_changed {
+            last_subway_stats.set_value(Some(stats_signature));
+            leptos::logging::log!(
+                "[subway] connections={} ports_at_node_origin={}/{} grid={}x{} ({} cells) expansions={} routed={} fallbacks={} (grid={} budget={} no_path={})",
+                conns.len(),
+                ports_at_node_origin,
+                ports.len(),
+                stats.grid_width,
+                stats.grid_height,
+                stats.grid_cells,
+                stats.expansions,
+                stats.routed,
+                stats.fallbacks(),
+                stats.grid_fallbacks,
+                stats.budget_fallbacks,
+                stats.no_path_fallbacks,
+            );
+        }
 
         conns
             .values()
