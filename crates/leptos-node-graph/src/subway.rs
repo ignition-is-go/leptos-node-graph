@@ -1005,6 +1005,51 @@ struct LaneSegment {
     hi_dir: f64,
 }
 
+/// Pairwise nesting preference used as a vote, not directly as a sort
+/// comparator: three bracket-shaped runs can form a preference cycle.
+fn lane_nesting_preference(a: &LaneSegment, b: &LaneSegment) -> f64 {
+    let mut preference = 0.0;
+    if a.hi < b.hi - EPS {
+        preference += a.hi_dir;
+    } else if b.hi < a.hi - EPS {
+        preference -= b.hi_dir;
+    }
+    if a.lo > b.lo + EPS {
+        preference += a.lo_dir;
+    } else if b.lo > a.lo + EPS {
+        preference -= b.lo_dir;
+    }
+    preference
+}
+
+fn aggregate_nesting_scores(representatives: &[LaneSegment]) -> Vec<f64> {
+    representatives
+        .iter()
+        .map(|a| {
+            representatives
+                .iter()
+                .map(|b| lane_nesting_preference(a, b))
+                .sum()
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+struct LaneOrderKey {
+    nesting_score: f64,
+    sort_key: f64,
+    coord: f64,
+    stable_key: (usize, usize),
+}
+
+fn compare_lane_order(a: LaneOrderKey, b: LaneOrderKey) -> std::cmp::Ordering {
+    a.nesting_score
+        .total_cmp(&b.nesting_score)
+        .then(a.sort_key.total_cmp(&b.sort_key))
+        .then(a.coord.total_cmp(&b.coord))
+        .then(a.stable_key.cmp(&b.stable_key))
+}
+
 struct Shift {
     seg: LaneSegment,
     axis: Axis,
@@ -1290,25 +1335,6 @@ fn assign_lanes(
         })
         .collect();
 
-    // Nesting order: when one run turns off inside another's span, the turn
-    // direction dictates which side it must sit on — a run peeling off downward
-    // must ride BELOW runs that continue, etc. This makes bundles making the
-    // same jog nest like concentric brackets instead of braiding.
-    let nest_cmp = |a: &LaneSegment, b: &LaneSegment| -> f64 {
-        let mut pref = 0.0;
-        if a.hi < b.hi - EPS {
-            pref += a.hi_dir;
-        } else if b.hi < a.hi - EPS {
-            pref -= b.hi_dir;
-        }
-        if a.lo > b.lo + EPS {
-            pref += a.lo_dir;
-        } else if b.lo > a.lo + EPS {
-            pref -= b.lo_dir;
-        }
-        pref
-    };
-
     // When the full lane offset would push a segment into a node box (tight
     // corridors between packed nodes), back off progressively — partial
     // separation beats either tunnelling a box or staying coincident.
@@ -1347,22 +1373,27 @@ fn assign_lanes(
     // near-coincident corridors collapse into an evenly spaced fan. Units are
     // ordered by where their segments come from / go to, so parallel runs peel
     // off in a stable order and avoid gratuitous criss-crossing.
-    let mut movable: Vec<&LaneUnit> = units.iter().filter(|u| !u.pinned).collect();
-    movable.sort_by(|a, b| {
-        let nest = nest_cmp(&a.rep, &b.rep);
-        nest.partial_cmp(&0.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(
-                a.sort_key
-                    .partial_cmp(&b.sort_key)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-            .then(
-                a.coord
-                    .partial_cmp(&b.coord)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
+    let movable_units: Vec<&LaneUnit> = units.iter().filter(|unit| !unit.pinned).collect();
+    let representatives: Vec<_> = movable_units.iter().map(|unit| unit.rep).collect();
+    let nesting_scores = aggregate_nesting_scores(&representatives);
+    let mut movable: Vec<_> = movable_units.into_iter().zip(nesting_scores).collect();
+    movable.sort_by(|(a, a_score), (b, b_score)| {
+        compare_lane_order(
+            LaneOrderKey {
+                nesting_score: *a_score,
+                sort_key: a.sort_key,
+                coord: a.coord,
+                stable_key: (a.rep.route, a.rep.i),
+            },
+            LaneOrderKey {
+                nesting_score: *b_score,
+                sort_key: b.sort_key,
+                coord: b.coord,
+                stable_key: (b.rep.route, b.rep.i),
+            },
+        )
     });
+    let movable: Vec<_> = movable.into_iter().map(|(unit, _)| unit).collect();
     if movable.is_empty() {
         return;
     }
@@ -1871,6 +1902,65 @@ mod tests {
         };
         assert!(!route_intersects_rect(&route, far, 4.0));
         assert!(route_intersects_rect(&route, near, 8.0));
+    }
+
+    #[test]
+    fn aggregate_nesting_order_resolves_pairwise_preference_cycle() {
+        let segment = |route, lo, hi, lo_dir, hi_dir| LaneSegment {
+            route,
+            i: 0,
+            coord: 10.0,
+            lo,
+            hi,
+            pinned: false,
+            sort_key: 0.0,
+            lo_dir,
+            hi_dir,
+        };
+        // These three brackets vote A < B, B < C, and C < A. Feeding those
+        // votes directly to sort_by was the non-transitive live-WASM panic.
+        let a = segment(0, 1.0, 3.0, -1.0, 1.0);
+        let b = segment(1, 0.0, 3.0, -1.0, -1.0);
+        let c = segment(2, 1.0, 4.0, 0.0, -1.0);
+        assert!(lane_nesting_preference(&a, &b) < 0.0);
+        assert!(lane_nesting_preference(&b, &c) < 0.0);
+        assert!(lane_nesting_preference(&c, &a) < 0.0);
+
+        let permutations = [
+            vec![a, b, c],
+            vec![a, c, b],
+            vec![b, a, c],
+            vec![b, c, a],
+            vec![c, a, b],
+            vec![c, b, a],
+        ];
+        for representatives in permutations {
+            let scores = aggregate_nesting_scores(&representatives);
+            let mut ranked: Vec<_> = representatives.into_iter().zip(scores).collect();
+            ranked.sort_by(|(a, a_score), (b, b_score)| {
+                compare_lane_order(
+                    LaneOrderKey {
+                        nesting_score: *a_score,
+                        sort_key: a.sort_key,
+                        coord: a.coord,
+                        stable_key: (a.route, a.i),
+                    },
+                    LaneOrderKey {
+                        nesting_score: *b_score,
+                        sort_key: b.sort_key,
+                        coord: b.coord,
+                        stable_key: (b.route, b.i),
+                    },
+                )
+            });
+            assert_eq!(
+                ranked
+                    .into_iter()
+                    .map(|(segment, _)| segment.route)
+                    .collect::<Vec<_>>(),
+                vec![0, 1, 2]
+            );
+        }
     }
 
     #[test]
