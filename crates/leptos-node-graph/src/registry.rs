@@ -289,85 +289,129 @@ where
 
     /// Update a node's position.
     pub fn set_node_position(&self, id: &N, position: Position) {
-        self.nodes.update(|nodes| {
-            if let Some(entry) = nodes.get_mut(id) {
-                entry.position = position;
+        self.nodes.maybe_update(|nodes| {
+            let Some(entry) = nodes.get_mut(id) else {
+                return false;
+            };
+            if entry.position == position {
+                return false;
             }
+            entry.position = position;
+            true
         });
     }
 
     /// Update a node's position and its consumer signal. Used during drag for live feedback.
     pub fn set_node_position_with_signal(&self, id: &N, position: Position) {
-        let signal = self
-            .nodes
-            .with_untracked(|nodes| nodes.get(id).and_then(|e| e.position_signal));
-        self.nodes.update(|nodes| {
-            if let Some(entry) = nodes.get_mut(id) {
-                entry.position = position;
+        let mut signal = None;
+        self.nodes.maybe_update(|nodes| {
+            let Some(entry) = nodes.get_mut(id) else {
+                return false;
+            };
+            signal = entry.position_signal;
+            if entry.position == position {
+                return false;
             }
+            entry.position = position;
+            true
         });
-        if let Some(sig) = signal {
-            sig.set(position);
+        if let Some(signal) = signal
+            && signal.get_untracked() != position
+        {
+            signal.set(position);
         }
     }
 
     /// Batch-update positions for multiple nodes during drag.
     /// Updates node entries, port positions (via cached offsets), and position signals.
-    /// Minimizes reactive notifications: 1 nodes update + 1 ports update + N signal sets.
+    /// Each map notifies at most once, and only when at least one value changed.
     pub fn batch_set_positions(&self, updates: &[(N, Position)]) {
-        // 1. Update node entries, collect position signals
-        let node_signals: Vec<(RwSignal<Position>, Position)> = self
-            .nodes
-            .try_update(|nodes| {
-                updates
-                    .iter()
-                    .filter_map(|(id, pos)| {
-                        if let Some(entry) = nodes.get_mut(id) {
-                            entry.position = *pos;
-                            entry.position_signal.map(|sig| (sig, *pos))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // 2. Batch-update port positions using cached offsets (one ports.update)
-        let update_map: HashMap<&N, &Position> =
-            updates.iter().map(|(id, pos)| (id, pos)).collect();
-        self.ports.update(|ports| {
-            for entry in ports.values_mut() {
-                if let Some(new_node_pos) = update_map.get(&entry.node_id)
-                    && let Some(offset) = entry.offset
-                {
-                    entry.position =
-                        Position::new(new_node_pos.x + offset.x, new_node_pos.y + offset.y);
+        // 1. Update node entries and collect only consumer signals that changed.
+        let mut node_signals = Vec::new();
+        let mut node_moves = HashMap::new();
+        self.nodes.maybe_update(|nodes| {
+            let mut changed = false;
+            for (id, position) in updates {
+                let Some(entry) = nodes.get_mut(id) else {
+                    continue;
+                };
+                if entry.position == *position {
+                    if let Some(signal) = entry.position_signal
+                        && signal.get_untracked() != *position
+                    {
+                        node_signals.push((signal, *position));
+                    }
+                    continue;
                 }
+                let delta =
+                    Position::new(position.x - entry.position.x, position.y - entry.position.y);
+                entry.position = *position;
+                node_moves.insert(id.clone(), (*position, delta));
+                if let Some(signal) = entry.position_signal {
+                    node_signals.push((signal, *position));
+                }
+                changed = true;
             }
+            changed
         });
 
-        // 3. Set position signals (drives CSS node positioning via style=)
-        for (sig, pos) in node_signals {
-            sig.set(pos);
+        // 2. Batch-update port positions. Measured ports use their exact cached
+        // offset; dynamic siblings whose offset was invalidated still follow
+        // the node by translating their last known absolute position.
+        self.ports.maybe_update(|ports| {
+            let mut changed = false;
+            for entry in ports.values_mut() {
+                let Some((new_node_position, delta)) = node_moves.get(&entry.node_id) else {
+                    continue;
+                };
+                let position = match entry.offset {
+                    Some(offset) => Position::new(
+                        new_node_position.x + offset.x,
+                        new_node_position.y + offset.y,
+                    ),
+                    None => Position::new(entry.position.x + delta.x, entry.position.y + delta.y),
+                };
+                if entry.position != position {
+                    entry.position = position;
+                    changed = true;
+                }
+            }
+            changed
+        });
+
+        // 3. Set position signals (drives CSS node positioning via style=).
+        for (signal, position) in node_signals {
+            if signal.get_untracked() != position {
+                signal.set(position);
+            }
         }
     }
 
     /// Update a node's size.
     pub fn set_node_size(&self, id: &N, size: Size) {
-        self.nodes.update(|nodes| {
-            if let Some(entry) = nodes.get_mut(id) {
-                entry.size = size;
+        self.nodes.maybe_update(|nodes| {
+            let Some(entry) = nodes.get_mut(id) else {
+                return false;
+            };
+            if entry.size == size {
+                return false;
             }
+            entry.size = size;
+            true
         });
     }
 
     /// Update a port's absolute canvas-space position.
     pub fn set_port_position(&self, id: &P, position: Position) {
-        self.ports.update(|ports| {
-            if let Some(entry) = ports.get_mut(id) {
-                entry.position = position;
+        self.ports.maybe_update(|ports| {
+            let Some(entry) = ports.get_mut(id) else {
+                return false;
+            };
+            if entry.position == position {
+                return false;
             }
+            entry.position = position;
+            true
         });
     }
 
@@ -606,5 +650,108 @@ where
                 .map(|entry| entry.id.clone())
                 .collect()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum TestPortType {
+        Any,
+    }
+
+    impl PortType for TestPortType {
+        fn compatible(_: &Self, _: &Self) -> bool {
+            true
+        }
+
+        fn type_id(&self) -> String {
+            "any".into()
+        }
+
+        fn from_type_id(_: &str) -> Self {
+            Self::Any
+        }
+    }
+
+    #[test]
+    fn geometry_writes_gate_noops_and_translate_offsetless_ports() {
+        Owner::new().with(|| {
+            let registry = EditorRegistry::<String, String, String, TestPortType>::new(
+                EditorConfig::default(),
+                Callback::new(|_: GraphEvent<String, String, String>| {}),
+            );
+            let position = Position::new(10.0, 20.0);
+            let position_signal = RwSignal::new(position);
+            let node_id = "node".to_string();
+            let port_id = "port".to_string();
+            let dynamic_port_id = "dynamic-port".to_string();
+            registry.register_node(node_id.clone(), position, Some(position_signal));
+            registry.register_port(
+                port_id.clone(),
+                node_id.clone(),
+                PortDirection::Output,
+                TestPortType::Any,
+                Position::new(30.0, 25.0),
+            );
+            registry.register_port(
+                dynamic_port_id.clone(),
+                node_id.clone(),
+                PortDirection::Output,
+                TestPortType::Any,
+                Position::new(50.0, 60.0),
+            );
+            registry.set_port_offset(&port_id, Position::new(20.0, 5.0));
+
+            let node_reads = Arc::new(AtomicUsize::new(0));
+            let node_reads_memo = Arc::clone(&node_reads);
+            let nodes = registry.nodes;
+            let node_geometry = Memo::new(move |_| {
+                node_reads_memo.fetch_add(1, Ordering::Relaxed);
+                nodes.with(|nodes| nodes.get("node").map(|node| (node.position, node.size)))
+            });
+
+            let port_reads = Arc::new(AtomicUsize::new(0));
+            let port_reads_memo = Arc::clone(&port_reads);
+            let ports = registry.ports;
+            let port_geometry = Memo::new(move |_| {
+                port_reads_memo.fetch_add(1, Ordering::Relaxed);
+                ports.with(|ports| {
+                    Some((
+                        ports.get("port")?.position,
+                        ports.get("dynamic-port")?.position,
+                    ))
+                })
+            });
+
+            assert!(node_geometry.get().is_some());
+            assert!(port_geometry.get().is_some());
+            registry.set_node_position(&node_id, position);
+            registry.set_node_position_with_signal(&node_id, position);
+            registry.set_node_size(&node_id, Size::default());
+            registry.set_port_position(&port_id, Position::new(30.0, 25.0));
+            registry.batch_set_positions(&[("node".into(), position)]);
+            assert!(node_geometry.get().is_some());
+            assert!(port_geometry.get().is_some());
+
+            assert_eq!(node_reads.load(Ordering::Relaxed), 1);
+            assert_eq!(port_reads.load(Ordering::Relaxed), 1);
+
+            let moved = Position::new(20.0, 30.0);
+            registry.batch_set_positions(&[(node_id.clone(), moved)]);
+            assert_eq!(node_geometry.get(), Some((moved, Size::default())));
+            assert_eq!(
+                port_geometry.get(),
+                Some((Position::new(40.0, 35.0), Position::new(60.0, 70.0)))
+            );
+            assert_eq!(position_signal.get_untracked(), moved);
+            assert_eq!(node_reads.load(Ordering::Relaxed), 2);
+            assert_eq!(port_reads.load(Ordering::Relaxed), 2);
+        });
     }
 }
