@@ -48,13 +48,17 @@ pub enum GroupEvent<N: NodeId> {
     NodeAdded { group_id: String, node_id: N },
     /// A node was removed from a group (alt+drag started).
     NodeRemoved { group_id: String, node_id: N },
+    /// The group color chip was cycled.
+    ColorChanged { group_id: String, new_color: String },
 }
 
 /// Renders group box overlays. Groups are visual containers around nodes.
 ///
 /// - Double-click a label to rename it inline
-/// - Alt+drag a node: immediately removes it from its group.
-///   Dropping onto another group adds it there.
+/// - Alt+drag an empty canvas: creates a group from the enclosed nodes.
+/// - Alt+drag a node: immediately removes it from its group. Dropping onto
+///   another group adds it there.
+/// - Ctrl+G: creates a group from the current selection.
 #[component]
 pub fn GroupBoxOverlay<N, P, C, T>(
     /// Reactive list of group definitions.
@@ -71,6 +75,12 @@ pub fn GroupBoxOverlay<N, P, C, T>(
     /// Optional callback for custom header rendering per group.
     #[prop(optional)]
     header: Option<Callback<(GroupBox<N>, GroupBounds), AnyView>>,
+    /// Optional action for removing a group.
+    #[prop(optional)]
+    on_ungroup: Option<Callback<String>>,
+    /// Optional action for selecting every member of a group.
+    #[prop(optional)]
+    on_select_all: Option<Callback<Vec<N>>>,
 ) -> impl IntoView
 where
     N: NodeId,
@@ -80,6 +90,18 @@ where
 {
     let registry = expect_context::<EditorRegistry<N, P, C, T>>();
     let padding = padding.unwrap_or(16.0);
+    // Keep the library's selection state in sync with the consumer callback.
+    // Nodes render their highlight from this registry signal; updating only a
+    // consumer-owned selection signal makes the action appear to do nothing.
+    let on_select_all_nodes = on_select_all.map(|callback| {
+        let registry = registry.clone();
+        Callback::new(move |node_ids: Vec<N>| {
+            registry
+                .selected_nodes
+                .set(node_ids.iter().cloned().collect());
+            callback.run(node_ids);
+        })
+    });
 
     // Track which group the alt-dragged node is hovering over (for visual feedback)
     let hover_group: RwSignal<Option<String>> = RwSignal::new(None);
@@ -133,10 +155,14 @@ where
                         // Check against current group bounds
                         let current_groups = groups.get_untracked();
                         let nodes_map = reg_drag.nodes.get_untracked();
+                        let live_positions = reg_drag.live_positions.get_untracked();
                         for group in &current_groups {
-                            if let Some(bounds) =
-                                compute_bounds(&group.node_ids, &nodes_map, padding)
-                                && bounds.contains(center)
+                            if let Some(bounds) = compute_bounds(
+                                &group.node_ids,
+                                &nodes_map,
+                                &live_positions,
+                                padding,
+                            ) && bounds.contains(center)
                             {
                                 on_ev.run(GroupEvent::NodeAdded {
                                     group_id: group.id.clone(),
@@ -166,9 +192,11 @@ where
 
                 if let Some(center) = node_center {
                     let current_groups = groups.get_untracked();
+                    let live_positions = reg_drag.live_positions.get();
                     let mut found = None;
                     for group in &current_groups {
-                        if let Some(bounds) = compute_bounds(&group.node_ids, &all_nodes, padding)
+                        if let Some(bounds) =
+                            compute_bounds(&group.node_ids, &all_nodes, &live_positions, padding)
                             && bounds.contains(center)
                         {
                             found = Some(group.id.clone());
@@ -186,13 +214,16 @@ where
     // Render groups
     move || {
         let groups = groups.get();
+        // `compute_bounds` reads each node's live consumer-owned position
+        // signal, while this map read tracks membership and measured sizes.
         let nodes = registry.nodes.get();
+        let live_positions = registry.live_positions.get();
         let hovered = hover_group.get();
 
         groups
             .into_iter()
             .filter_map(|group| {
-                let bounds = compute_bounds(&group.node_ids, &nodes, padding)?;
+                let bounds = compute_bounds(&group.node_ids, &nodes, &live_positions, padding)?;
 
                 let has_label = group.label.is_some();
                 let label_height = if has_label { 24.0 } else { 0.0 };
@@ -209,6 +240,13 @@ where
                     .color
                     .clone()
                     .unwrap_or_else(|| gs.default_color.clone());
+                // The original slate default is too bright as a translucent
+                // group fill; normalize it for existing persisted groups too.
+                let color = if color.eq_ignore_ascii_case("#64748b") {
+                    "#3f4752".to_string()
+                } else {
+                    color
+                };
                 let is_error = group.error;
                 let is_hovered = hovered.as_ref() == Some(&group.id);
 
@@ -227,12 +265,19 @@ where
                 };
 
                 let border_style = if is_hovered { "solid" } else { "dashed" };
+                let glow = if is_hovered {
+                    format!(
+                        "box-shadow: 0 0 0 2px color-mix(in srgb, {color} 70%, transparent), 0 0 22px color-mix(in srgb, {color} 45%, transparent);"
+                    )
+                } else {
+                    String::new()
+                };
 
                 let box_style = format!(
                     "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
                      pointer-events: none; z-index: 0; \
                      background: {bg_color}; border: 1px {border_style} {border_color}; \
-                     border-radius: {}; transition: background 0.15s, border 0.15s;",
+                     border-radius: {}; {glow} transition: background 0.15s, border 0.15s, box-shadow 0.15s;",
                     final_bounds.x,
                     final_bounds.y,
                     final_bounds.width,
@@ -251,14 +296,19 @@ where
                         };
 
                         let group_id = group.id.clone();
+                        let group_color = color.clone();
                         let on_event_rename = on_event;
 
                         view! {
                             <GroupLabel
                                 label=label
                                 color=label_color
+                                group_color=group_color
                                 group_id=group_id
                                 on_rename=on_event_rename
+                                on_ungroup=on_ungroup
+                                on_select_all=on_select_all_nodes
+                                node_ids=group.node_ids.clone()
                             />
                         }
                         .into_any()
@@ -275,42 +325,50 @@ where
     }
 }
 
-/// Editable group label — double-click to rename.
+/// Editable group label.
 #[component]
 fn GroupLabel<N: NodeId>(
     label: String,
     color: String,
+    group_color: String,
     group_id: String,
     on_rename: Option<Callback<GroupEvent<N>>>,
+    on_ungroup: Option<Callback<String>>,
+    on_select_all: Option<Callback<Vec<N>>>,
+    node_ids: Vec<N>,
 ) -> impl IntoView {
-    let (editing, set_editing) = signal(false);
     let (text, set_text) = signal(label.clone());
-    let input_ref = NodeRef::<leptos::html::Input>::new();
 
     let gs = use_context::<GroupStyle>().unwrap_or_default();
 
-    let label_style = format!(
-        "position: absolute; top: 6px; left: 10px; \
+    let label_color = color.clone();
+    let label_style = Signal::derive(move || {
+        format!(
+            "position: absolute; top: 6px; left: 10px; z-index: 2; \
+         right: 10px; display: flex; align-items: center; justify-content: space-between; \
          font-size: {}; font-weight: {}; text-transform: uppercase; \
-         letter-spacing: 0.05em; color: {color}; \
+         letter-spacing: 0.05em; color: {label_color}; \
+         background: transparent; \
+         padding: 2px 5px; border-radius: 3px; white-space: nowrap; \
          pointer-events: auto; cursor: default;",
-        gs.label_font_size, gs.label_font_weight
-    );
+            gs.label_font_size, gs.label_font_weight
+        )
+    });
 
     let input_style = format!(
-        "position: absolute; top: 4px; left: 8px; \
+        "position: absolute; top: 4px; left: 20px; z-index: 2; \
          font-size: 10px; font-weight: 600; text-transform: uppercase; \
          letter-spacing: 0.05em; color: {color}; \
-         background: {}; border: 1px solid {color}; \
+         background: transparent; border: 0; \
          border-radius: 3px; padding: 1px 4px; outline: none; \
-         pointer-events: auto;",
-        gs.input_background
+         width: calc(100% - 56px); box-sizing: border-box; \
+         pointer-events: auto;"
     );
 
     let group_id_commit = group_id.clone();
     let on_rename_commit = on_rename;
+    let on_color = on_rename;
     let commit = move || {
-        set_editing.set(false);
         let new_label = text.get_untracked();
         if let Some(ref cb) = on_rename_commit {
             cb.run(GroupEvent::Renamed {
@@ -320,63 +378,109 @@ fn GroupLabel<N: NodeId>(
         }
     };
 
-    // Focus input when entering edit mode
-    Effect::new(move || {
-        if editing.get()
-            && let Some(el) = input_ref.get()
-        {
-            let _ = el.focus();
-            el.select();
-        }
-    });
-
-    move || {
-        if editing.get() {
-            let commit_blur = commit.clone();
-            let commit_key = commit.clone();
-            view! {
-                <input
-                    node_ref=input_ref
-                    type="text"
-                    style=input_style.clone()
-                    prop:value=move || text.get()
-                    on:input=move |ev| {
-                        use leptos::wasm_bindgen::JsCast;
-                        let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlInputElement>();
-                        set_text.set(t.value());
+    let commit_blur = commit.clone();
+    let commit_key = commit.clone();
+    view! {
+        <span
+            style=label_style
+            title="Ctrl+G with nodes selected creates a group. Alt-drag removes this node; drop onto another group to add it."
+            on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
+            on:click=|ev: web_sys::MouseEvent| ev.stop_propagation()
+        >
+            <input
+                type="text"
+                style=input_style
+                prop:value=move || text.get()
+                aria-label="Group title"
+                on:input=move |ev| {
+                    use leptos::wasm_bindgen::JsCast;
+                    let t = ev.target().unwrap().unchecked_into::<web_sys::HtmlInputElement>();
+                    set_text.set(t.value());
+                }
+                on:blur=move |_| { commit_blur(); }
+                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                    ev.stop_propagation();
+                    if ev.key() == "Enter" {
+                        commit_key();
+                    } else if ev.key() == "Escape" {
+                        set_text.set(label.clone());
+                        ev.prevent_default();
                     }
-                    on:blur=move |_| { commit_blur(); }
-                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                }
+                on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
+            />
+            <button
+                type="button"
+                title="Change group color"
+                style=format!("position:absolute; top:6px; left:4px; width:10px; height:10px; padding:0; border:0; border-radius:50%; background:{}; cursor:pointer; pointer-events:auto;", group_color)
+                on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                on:dblclick=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                on:click={
+                    let group_id = group_id.clone();
+                    let current = group_color.clone();
+                    move |ev: web_sys::MouseEvent| {
                         ev.stop_propagation();
-                        if ev.key() == "Enter" || ev.key() == "Escape" {
-                            commit_key();
+                        if let Some(ref callback) = on_color {
+                            callback.run(GroupEvent::ColorChanged {
+                                group_id: group_id.clone(),
+                                new_color: next_group_color(&current),
+                            });
                         }
                     }
-                    on:mousedown=move |ev: web_sys::MouseEvent| { ev.stop_propagation(); }
-                />
-            }
-            .into_any()
-        } else {
-            view! {
-                <span
-                    style=label_style.clone()
-                    on:dblclick=move |ev: web_sys::MouseEvent| {
-                        ev.stop_propagation();
-                        set_editing.set(true);
-                    }
-                >
-                    {move || text.get()}
-                </span>
-            }
-            .into_any()
-        }
+                }
+            ></button>
+            <span style="position:absolute; top:50%; right:4px; transform:translateY(-50%); display:inline-flex; align-items:center; gap:6px;">
+                    {on_select_all.map(|callback| {
+                        let node_ids = node_ids.clone();
+                        view! {
+                            <button
+                                type="button"
+                                title="Select all in group"
+                                style="width:12px; height:14px; padding:0; font-size:10px; line-height:1; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    ev.stop_propagation();
+                                    callback.run(node_ids.clone());
+                                }
+                            >"☷"</button>
+                        }
+                    })}
+                    {on_ungroup.map(|callback| {
+                        let group_id = group_id.clone();
+                        view! {
+                            <button
+                                type="button"
+                                title="Ungroup"
+                                style="width:12px; height:14px; padding:0; font-size:10px; line-height:1; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    ev.stop_propagation();
+                                    callback.run(group_id.clone());
+                                }
+                            >"×"</button>
+                        }
+                    })}
+            </span>
+        </span>
     }
+}
+
+fn next_group_color(current: &str) -> String {
+    const COLORS: [&str; 7] = [
+        "#3f4752", "#EF476F", "#F78C6B", "#FFD166", "#06D6A0", "#118AB2", "#073B4C",
+    ];
+    let index = COLORS
+        .iter()
+        .position(|color| *color == current)
+        .unwrap_or(0);
+    COLORS[(index + 1) % COLORS.len()].to_string()
 }
 
 /// Compute bounding box from a set of node IDs.
 fn compute_bounds<N: NodeId>(
     node_ids: &[N],
     nodes: &std::collections::HashMap<N, crate::registry::NodeEntry<N>>,
+    live_positions: &std::collections::HashMap<N, Position>,
     padding: f64,
 ) -> Option<GroupBounds> {
     let mut min_x = f64::MAX;
@@ -386,26 +490,32 @@ fn compute_bounds<N: NodeId>(
     let mut found = false;
 
     for node_id in node_ids {
-        if let Some(entry) = nodes.get(node_id) {
-            let x = entry.position.x;
-            let y = entry.position.y;
-            let w = if entry.size.width > 0.0 {
-                entry.size.width
-            } else {
-                160.0
-            };
-            let h = if entry.size.height > 0.0 {
-                entry.size.height
-            } else {
-                80.0
-            };
-
-            min_x = min_x.min(x);
-            min_y = min_y.min(y);
-            max_x = max_x.max(x + w);
-            max_y = max_y.max(y + h);
-            found = true;
-        }
+        let Some(entry) = nodes.get(node_id) else {
+            // A group with a stale membership should not render a misleading
+            // box. The consumer can remove the missing node and the group will
+            // recover on the next reactive update.
+            return None;
+        };
+        // Use a conservative fallback until the node's first measurement
+        // arrives. The overlay must exist during that initial frame; measured
+        // dimensions replace these values reactively as soon as they land.
+        let w = entry.size.width.max(160.0);
+        let h = entry.size.height.max(80.0);
+        // The registry position is the live interaction position. The
+        // consumer-owned signal may be backed by resolved/persisted state and
+        // only catch up when the drag is committed, so using it here makes
+        // group bounds update only on drop.
+        let position = live_positions
+            .get(node_id)
+            .copied()
+            .unwrap_or(entry.position);
+        let x = position.x;
+        let y = position.y;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x + w);
+        max_y = max_y.max(y + h);
+        found = true;
     }
 
     if !found {

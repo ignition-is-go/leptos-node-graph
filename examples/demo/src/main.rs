@@ -62,8 +62,6 @@ struct DynNode {
     category: Option<Category>,
 }
 
-
-
 /// The full node type catalog with port definitions.
 
 #[component]
@@ -159,7 +157,8 @@ fn App() -> impl IntoView {
                     connect_direction,
                 } => {
                     let node_id = next_id(&item_id);
-                    let cat = node_registry.get(&item_id)
+                    let cat = node_registry
+                        .get(&item_id)
                         .and_then(|def| def.menu_item.category.clone());
                     let position_signal = app_owner.with(|| RwSignal::new(position));
                     nodes.update(|ns| {
@@ -222,7 +221,7 @@ fn App() -> impl IntoView {
         background: "rgba(255, 255, 255, 0.025)".into(),
     });
 
-    provide_context(NodeStyle{
+    provide_context(NodeStyle {
         header_padding_y: 4.0,
         body_padding_y: 2.0,
         border_radius: "0.125rem".into(),
@@ -236,11 +235,10 @@ fn App() -> impl IntoView {
         ..Default::default()
     });
 
-    provide_context(theme::AnchorStyle{
-    row_height: 20.0,
-    ..Default::default()
+    provide_context(theme::AnchorStyle {
+        row_height: 20.0,
+        ..Default::default()
     });
-
 
     let groups_signal = Signal::derive(move || groups.get());
 
@@ -258,9 +256,10 @@ fn App() -> impl IntoView {
         GroupEvent::NodeAdded { group_id, node_id } => {
             groups.update(|gs| {
                 if let Some(g) = gs.iter_mut().find(|g| g.id == group_id)
-                    && !g.node_ids.contains(&node_id) {
-                        g.node_ids.push(node_id);
-                    }
+                    && !g.node_ids.contains(&node_id)
+                {
+                    g.node_ids.push(node_id);
+                }
             });
         }
         GroupEvent::NodeRemoved { group_id, node_id } => {
@@ -338,7 +337,8 @@ fn App() -> impl IntoView {
 /// Renders a node using the type registry.
 #[component]
 fn DynNodeView(node: DynNode, registry: NodeTypeRegistry) -> impl IntoView {
-    registry.render(&node.node_type, node.id, node.position)
+    registry
+        .render(&node.node_type, node.id, node.position)
         .unwrap_or_else(|| view! { <div>"Unknown node type"</div> }.into_any())
 }
 

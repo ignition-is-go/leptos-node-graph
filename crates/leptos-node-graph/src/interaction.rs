@@ -81,11 +81,13 @@ pub fn handle_canvas_mousedown<N, P, C, T>(
         registry.clear_selection();
     }
 
-    // Start box select
+    // Start box select. Alt changes the same gesture into group creation on
+    // mouseup, which keeps the familiar selection rectangle as the preview.
     let canvas_pos = canvas_pos_from_event(registry, &ev, container_ref);
     registry.box_select.set(Some(BoxSelect {
         start: canvas_pos,
         current: canvas_pos,
+        create_group: ev.alt_key(),
     }));
 }
 
@@ -255,7 +257,17 @@ pub fn handle_canvas_mouseup<N, P, C, T>(
     if was_panning {
         registry.pan_origin.set(None);
     }
+    let box_select = registry.box_select.get_untracked();
     registry.box_select.set(None);
+
+    if box_select.is_some_and(|bs| bs.create_group) {
+        let ids: Vec<N> = registry
+            .selected_nodes
+            .with_untracked(|selected| selected.iter().cloned().collect());
+        if ids.len() > 1 {
+            registry.emit(GraphEvent::GroupCreated { node_ids: ids });
+        }
+    }
 
     // End a width resize. No event to emit here — the node's measured-size effect
     // has been emitting `NodeResized` throughout the gesture.
