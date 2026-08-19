@@ -429,14 +429,14 @@ fn GroupLabel<N: NodeId>(
                     }
                 }
             ></button>
-            <span style="position:absolute; top:2px; right:4px; display:inline-flex; align-items:center; gap:6px;">
+            <span style="position:absolute; top:50%; right:4px; transform:translateY(-50%); display:inline-flex; align-items:center; gap:6px;">
                     {on_select_all.map(|callback| {
                         let node_ids = node_ids.clone();
                         view! {
                             <button
                                 type="button"
                                 title="Select all in group"
-                                style="pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="width:12px; height:14px; padding:0; font-size:10px; line-height:1; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
@@ -451,7 +451,7 @@ fn GroupLabel<N: NodeId>(
                             <button
                                 type="button"
                                 title="Ungroup"
-                                style="pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="width:12px; height:14px; padding:0; font-size:10px; line-height:1; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
