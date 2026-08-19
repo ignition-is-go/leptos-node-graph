@@ -429,20 +429,20 @@ fn GroupLabel<N: NodeId>(
                     }
                 }
             ></button>
-            <span style="position:absolute; top:2px; right:4px; display:inline-flex; align-items:center;">
+            <span style="position:absolute; top:2px; right:4px; display:inline-flex; align-items:center; gap:6px;">
                     {on_select_all.map(|callback| {
                         let node_ids = node_ids.clone();
                         view! {
                             <button
                                 type="button"
                                 title="Select all in group"
-                                style="margin-left:4px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
                                     callback.run(node_ids.clone());
                                 }
-                            >"⤢"</button>
+                            >"☷"</button>
                         }
                     })}
                     {on_ungroup.map(|callback| {
@@ -451,7 +451,7 @@ fn GroupLabel<N: NodeId>(
                             <button
                                 type="button"
                                 title="Ungroup"
-                                style="margin-left:2px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
