@@ -41,6 +41,8 @@ pub struct ConnectionEntry<P: PortId, C: ConnectionId> {
 pub struct BoxSelect {
     pub start: Position,
     pub current: Position,
+    /// Alt-dragging an empty canvas creates a group from the enclosed nodes.
+    pub create_group: bool,
 }
 
 impl BoxSelect {
@@ -90,6 +92,8 @@ where
     T: PortType,
 {
     pub nodes: RwSignal<HashMap<N, NodeEntry<N>>>,
+    /// Live positions written by the drag RAF, independent of persisted state.
+    pub live_positions: RwSignal<HashMap<N, Position>>,
     pub ports: RwSignal<HashMap<P, PortEntry<N, P, T>>>,
     pub connections: RwSignal<HashMap<C, ConnectionEntry<P, C>>>,
     pub selected_nodes: RwSignal<HashSet<N>>,
@@ -146,6 +150,7 @@ where
     pub fn new(config: EditorConfig, on_event: Callback<GraphEvent<N, P, C>>) -> Self {
         Self {
             nodes: RwSignal::new(HashMap::new()),
+            live_positions: RwSignal::new(HashMap::new()),
             ports: RwSignal::new(HashMap::new()),
             connections: RwSignal::new(HashMap::new()),
             selected_nodes: RwSignal::new(HashSet::new()),
@@ -183,12 +188,15 @@ where
             nodes.insert(
                 id.clone(),
                 NodeEntry {
-                    id,
+                    id: id.clone(),
                     position,
                     size: Size::default(),
                     position_signal,
                 },
             );
+        });
+        self.live_positions.update(|positions| {
+            positions.insert(id, position);
         });
     }
 
@@ -210,6 +218,9 @@ where
 
         self.nodes.update(|nodes| {
             nodes.remove(id);
+        });
+        self.live_positions.update(|positions| {
+            positions.remove(id);
         });
 
         self.selected_nodes.update(|sel| {
@@ -299,6 +310,9 @@ where
             entry.position = position;
             true
         });
+        self.live_positions.update(|positions| {
+            positions.insert(id.clone(), position);
+        });
     }
 
     /// Update a node's position and its consumer signal. Used during drag for live feedback.
@@ -320,6 +334,9 @@ where
         {
             signal.set(position);
         }
+        self.live_positions.update(|positions| {
+            positions.insert(id.clone(), position);
+        });
     }
 
     /// Batch-update positions for multiple nodes during drag.
@@ -354,7 +371,6 @@ where
             }
             changed
         });
-
         // 2. Batch-update port positions. Measured ports use their exact cached
         // offset; dynamic siblings whose offset was invalidated still follow
         // the node by translating their last known absolute position.
@@ -385,6 +401,11 @@ where
                 signal.set(position);
             }
         }
+        self.live_positions.update(|positions| {
+            for (id, position) in updates {
+                positions.insert(id.clone(), *position);
+            }
+        });
     }
 
     /// Update a node's size.

@@ -2,10 +2,7 @@ use leptos::prelude::*;
 
 /// A styled select dropdown.
 #[component]
-pub fn Select(
-    options: Vec<(String, String)>,
-    value: RwSignal<String>,
-) -> impl IntoView {
+pub fn Select(options: Vec<(String, String)>, value: RwSignal<String>) -> impl IntoView {
     view! {
         <select
             style="flex: 1; background: #27272a; border: 1px solid #3f3f46; \
@@ -27,15 +24,15 @@ pub fn Select(
 }
 
 pub fn options_from(items: &[&str]) -> Vec<(String, String)> {
-    items.iter().map(|s| (s.to_string(), s.to_string())).collect()
+    items
+        .iter()
+        .map(|s| (s.to_string(), s.to_string()))
+        .collect()
 }
 
 /// A styled number input for anchor slot content.
 #[component]
-pub fn NumberInput(
-    #[prop(into)] label: String,
-    value: RwSignal<String>,
-) -> impl IntoView {
+pub fn NumberInput(#[prop(into)] label: String, value: RwSignal<String>) -> impl IntoView {
     view! {
         <div style="display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;">
             <span style="font-size: 11px; color: #a1a1aa; white-space: nowrap;">{label}</span>

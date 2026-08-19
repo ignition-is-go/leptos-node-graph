@@ -124,6 +124,12 @@ pub fn NodeEditor<N, P, C, T>(
     /// Callback for group events (rename, add/remove node).
     #[prop(optional, into)]
     on_group_event: Option<Callback<crate::group::GroupEvent<N>>>,
+    /// Optional callback for the group header's ungroup action.
+    #[prop(optional, into)]
+    on_ungroup: Option<Callback<String>>,
+    /// Optional callback for the group header's select-all action.
+    #[prop(optional, into)]
+    on_select_all: Option<Callback<Vec<N>>>,
     /// Optional consumer-owned handle. Gives code OUTSIDE the editor — a wrapping
     /// drop target, a toolbar, a minimap — access to the live viewport and to
     /// client/canvas coordinate conversion. See [`EditorHandle`].
@@ -434,6 +440,8 @@ where
             <GroupBoxOverlay<N, P, C, T>
                 groups=groups_signal
                 on_event=cb
+                on_ungroup=on_ungroup.unwrap_or_else(|| Callback::new(|_| {}))
+                on_select_all=on_select_all.unwrap_or_else(|| Callback::new(|_| {}))
             />
         }
         .into_any()
@@ -441,6 +449,8 @@ where
         view! {
             <GroupBoxOverlay<N, P, C, T>
                 groups=groups_signal
+                on_ungroup=on_ungroup.unwrap_or_else(|| Callback::new(|_| {}))
+                on_select_all=on_select_all.unwrap_or_else(|| Callback::new(|_| {}))
             />
         }
         .into_any()
