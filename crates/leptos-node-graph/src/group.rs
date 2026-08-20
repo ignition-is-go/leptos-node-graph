@@ -341,30 +341,22 @@ fn GroupLabel<N: NodeId>(
 
     let gs = use_context::<GroupStyle>().unwrap_or_default();
 
-    let label_color = color.clone();
-    let label_style = Signal::derive(move || {
+    let header_style = Signal::derive(move || {
         format!(
-            "position: absolute; top: 4px; left: 10px; z-index: 2; \
-         right: 10px; height: 16px; display: flex; align-items: center; justify-content: space-between; \
+            "position:absolute; top:4px; left:10px; right:4px; z-index:2; height:16px; \
+         display:flex; align-items:center; gap:6px; min-width:0; \
          font-size: {}; font-weight: {}; text-transform: uppercase; \
-         letter-spacing: 0.05em; color: {label_color}; \
-         background: transparent; \
-         padding: 0; line-height: 16px; border-radius: 3px; white-space: nowrap; \
+         letter-spacing:0.05em; color:{}; background:transparent; \
+         line-height:16px; white-space:nowrap; \
          pointer-events: auto; cursor: default;",
-            gs.label_font_size, gs.label_font_weight
+            gs.label_font_size, gs.label_font_weight, color
         )
     });
 
-    let input_style = format!(
-        "position: absolute; top: 3px; left: 20px; z-index: 2; height: 18px; \
-         line-height: 18px; \
-         font-size: 10px; font-weight: 600; text-transform: uppercase; \
-         letter-spacing: 0.05em; color: {color}; \
-         background: transparent; border: 0; \
-         border-radius: 3px; padding: 0 4px; outline: none; \
-         width: calc(100% - 56px); box-sizing: border-box; \
-         pointer-events: auto;"
-    );
+    let input_style = "flex:1 1 auto; min-width:0; height:18px; margin:0; padding:0 4px; \
+         box-sizing:border-box; border:0; outline:none; border-radius:3px; \
+         background:transparent; color:inherit; font:inherit; line-height:18px; \
+         text-transform:uppercase; letter-spacing:0.05em; pointer-events:auto;";
 
     let group_id_commit = group_id.clone();
     let on_rename_commit = on_rename;
@@ -382,12 +374,33 @@ fn GroupLabel<N: NodeId>(
     let commit_blur = commit.clone();
     let commit_key = commit.clone();
     view! {
-        <span
-            style=label_style
+        <div
+            style=header_style
             title="Ctrl+G with nodes selected creates a group. Alt-drag removes this node; drop onto another group to add it."
             on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
             on:click=|ev: web_sys::MouseEvent| ev.stop_propagation()
         >
+            <button
+                type="button"
+                title="Change group color"
+                aria-label="Change group color"
+                style=format!("flex:0 0 10px; width:10px; height:10px; margin:0; padding:0; border:0; border-radius:50%; background:{}; cursor:pointer; pointer-events:auto;", group_color)
+                on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                on:dblclick=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                on:click={
+                    let group_id = group_id.clone();
+                    let current = group_color.clone();
+                    move |ev: web_sys::MouseEvent| {
+                        ev.stop_propagation();
+                        if let Some(ref callback) = on_color {
+                            callback.run(GroupEvent::ColorChanged {
+                                group_id: group_id.clone(),
+                                new_color: next_group_color(&current),
+                            });
+                        }
+                    }
+                }
+            ></button>
             <input
                 type="text"
                 style=input_style
@@ -410,40 +423,22 @@ fn GroupLabel<N: NodeId>(
                 }
                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
             />
-            <button
-                type="button"
-                title="Change group color"
-                style=format!("position:absolute; top:7px; left:4px; width:10px; height:10px; padding:0; border:0; border-radius:50%; background:{}; cursor:pointer; pointer-events:auto;", group_color)
-                on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
-                on:dblclick=|ev: web_sys::MouseEvent| ev.stop_propagation()
-                on:click={
-                    let group_id = group_id.clone();
-                    let current = group_color.clone();
-                    move |ev: web_sys::MouseEvent| {
-                        ev.stop_propagation();
-                        if let Some(ref callback) = on_color {
-                            callback.run(GroupEvent::ColorChanged {
-                                group_id: group_id.clone(),
-                                new_color: next_group_color(&current),
-                            });
-                        }
-                    }
-                }
-            ></button>
-            <span style="position:absolute; top:calc(50% + 2px); right:4px; transform:translateY(-50%); height:16px; display:inline-flex; align-items:center; gap:8px;">
+            <span style="display:flex; flex:0 0 auto; align-items:center; gap:6px; height:16px;">
                     {on_select_all.map(|callback| {
                         let node_ids = node_ids.clone();
                         view! {
                             <button
                                 type="button"
                                 title="Select all in group"
-                                style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0; padding:0; font-size:12px; line-height:16px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0; padding:0; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
                                     callback.run(node_ids.clone());
                                 }
-                            >"☷"</button>
+                            >
+                                <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M4 4h4v4H4V4m6 0h4v4h-4V4m6 0h4v4h-4V4M4 10h4v4H4v-4m6 0h4v4h-4v-4m6 0h4v4h-4v-4M4 16h4v4H4v-4m6 0h4v4h-4v-4m6 0h4v4h-4v-4Z"/></svg>
+                            </button>
                         }
                     })}
                     {on_ungroup.map(|callback| {
@@ -452,17 +447,19 @@ fn GroupLabel<N: NodeId>(
                             <button
                                 type="button"
                                 title="Ungroup"
-                                style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0; padding:0; font-size:14px; line-height:16px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0; padding:0; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
                                     callback.run(group_id.clone());
                                 }
-                            >"×"</button>
+                            >
+                                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="m18.3 5.71-1.41-1.42L12 9.17 7.11 4.29 5.7 5.71l4.89 4.88-4.89 4.89 1.41 1.41L12 12l4.89 4.89 1.41-1.41-4.89-4.89 4.89-4.88Z"/></svg>
+                            </button>
                         }
                     })}
             </span>
-        </span>
+        </div>
     }
 }
 
