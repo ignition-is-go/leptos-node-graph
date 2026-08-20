@@ -430,7 +430,7 @@ fn GroupLabel<N: NodeId>(
                     }
                 }
             ></button>
-            <span style="position:absolute; top:50%; right:4px; transform:translateY(-50%); height:16px; display:inline-flex; align-items:center; gap:8px;">
+            <span style="position:absolute; top:calc(50% + 2px); right:4px; transform:translateY(-50%); height:16px; display:inline-flex; align-items:center; gap:8px;">
                     {on_select_all.map(|callback| {
                         let node_ids = node_ids.clone();
                         view! {
