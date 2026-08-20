@@ -430,14 +430,14 @@ fn GroupLabel<N: NodeId>(
                     }
                 }
             ></button>
-            <span style="position:absolute; top:4px; right:4px; height:16px; display:inline-flex; align-items:center; gap:8px;">
+            <span style="position:absolute; top:50%; right:4px; transform:translateY(-50%); height:16px; display:inline-flex; align-items:center; gap:8px;">
                     {on_select_all.map(|callback| {
                         let node_ids = node_ids.clone();
                         view! {
                             <button
                                 type="button"
                                 title="Select all in group"
-                                style="width:16px; height:16px; padding:0; font-size:12px; line-height:16px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0; padding:0; font-size:12px; line-height:16px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
@@ -452,7 +452,7 @@ fn GroupLabel<N: NodeId>(
                             <button
                                 type="button"
                                 title="Ungroup"
-                                style="width:16px; height:16px; padding:0; font-size:14px; line-height:16px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0; padding:0; font-size:14px; line-height:16px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
