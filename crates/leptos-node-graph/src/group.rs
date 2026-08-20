@@ -226,13 +226,16 @@ where
                 let bounds = compute_bounds(&group.node_ids, &nodes, &live_positions, padding)?;
 
                 let has_label = group.label.is_some();
-                let label_height = if has_label { 24.0 } else { 0.0 };
+                let header_height = if has_label { 24.0 } else { padding };
 
                 let final_bounds = GroupBounds {
                     x: bounds.x,
-                    y: bounds.y - label_height,
+                    // `bounds` already reserves `padding` above the first node.
+                    // The header replaces that top padding instead of stacking
+                    // another row above it.
+                    y: bounds.y + padding - header_height,
                     width: bounds.width,
-                    height: bounds.height + label_height,
+                    height: bounds.height + header_height - padding,
                 };
 
                 let gs = use_context::<GroupStyle>().unwrap_or_default();
@@ -341,29 +344,22 @@ fn GroupLabel<N: NodeId>(
 
     let gs = use_context::<GroupStyle>().unwrap_or_default();
 
-    let label_color = color.clone();
-    let label_style = Signal::derive(move || {
+    let header_style = Signal::derive(move || {
         format!(
-            "position: absolute; top: 6px; left: 10px; z-index: 2; \
-         right: 10px; display: flex; align-items: center; justify-content: space-between; \
+            "position:absolute; top:4px; left:10px; right:4px; z-index:2; height:16px; \
+         display:flex; align-items:center; gap:6px; min-width:0; \
          font-size: {}; font-weight: {}; text-transform: uppercase; \
-         letter-spacing: 0.05em; color: {label_color}; \
-         background: transparent; \
-         padding: 2px 5px; border-radius: 3px; white-space: nowrap; \
+         letter-spacing:0.05em; color:{}; background:transparent; \
+         line-height:16px; white-space:nowrap; \
          pointer-events: auto; cursor: default;",
-            gs.label_font_size, gs.label_font_weight
+            gs.label_font_size, gs.label_font_weight, color
         )
     });
 
-    let input_style = format!(
-        "position: absolute; top: 4px; left: 20px; z-index: 2; \
-         font-size: 10px; font-weight: 600; text-transform: uppercase; \
-         letter-spacing: 0.05em; color: {color}; \
-         background: transparent; border: 0; \
-         border-radius: 3px; padding: 1px 4px; outline: none; \
-         width: calc(100% - 56px); box-sizing: border-box; \
-         pointer-events: auto;"
-    );
+    let input_style = "flex:1 1 auto; min-width:0; height:18px; margin:0; padding:0 4px; \
+         box-sizing:border-box; border:0; outline:none; border-radius:3px; \
+         background:transparent; color:inherit; font:inherit; line-height:18px; \
+         text-transform:uppercase; letter-spacing:0.05em; pointer-events:auto;";
 
     let group_id_commit = group_id.clone();
     let on_rename_commit = on_rename;
@@ -381,12 +377,33 @@ fn GroupLabel<N: NodeId>(
     let commit_blur = commit.clone();
     let commit_key = commit.clone();
     view! {
-        <span
-            style=label_style
+        <div
+            style=header_style
             title="Ctrl+G with nodes selected creates a group. Alt-drag removes this node; drop onto another group to add it."
             on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
             on:click=|ev: web_sys::MouseEvent| ev.stop_propagation()
         >
+            <button
+                type="button"
+                title="Change group color"
+                aria-label="Change group color"
+                style=format!("flex:0 0 10px; width:10px; height:10px; margin:0; padding:0; border:0; border-radius:50%; background:{}; cursor:pointer; pointer-events:auto;", group_color)
+                on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                on:dblclick=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                on:click={
+                    let group_id = group_id.clone();
+                    let current = group_color.clone();
+                    move |ev: web_sys::MouseEvent| {
+                        ev.stop_propagation();
+                        if let Some(ref callback) = on_color {
+                            callback.run(GroupEvent::ColorChanged {
+                                group_id: group_id.clone(),
+                                new_color: next_group_color(&current),
+                            });
+                        }
+                    }
+                }
+            ></button>
             <input
                 type="text"
                 style=input_style
@@ -409,40 +426,22 @@ fn GroupLabel<N: NodeId>(
                 }
                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
             />
-            <button
-                type="button"
-                title="Change group color"
-                style=format!("position:absolute; top:6px; left:4px; width:10px; height:10px; padding:0; border:0; border-radius:50%; background:{}; cursor:pointer; pointer-events:auto;", group_color)
-                on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
-                on:dblclick=|ev: web_sys::MouseEvent| ev.stop_propagation()
-                on:click={
-                    let group_id = group_id.clone();
-                    let current = group_color.clone();
-                    move |ev: web_sys::MouseEvent| {
-                        ev.stop_propagation();
-                        if let Some(ref callback) = on_color {
-                            callback.run(GroupEvent::ColorChanged {
-                                group_id: group_id.clone(),
-                                new_color: next_group_color(&current),
-                            });
-                        }
-                    }
-                }
-            ></button>
-            <span style="position:absolute; top:50%; right:4px; transform:translateY(-50%); display:inline-flex; align-items:center; gap:6px;">
+            <span style="display:flex; flex:0 0 auto; align-items:center; gap:6px; height:16px;">
                     {on_select_all.map(|callback| {
                         let node_ids = node_ids.clone();
                         view! {
                             <button
                                 type="button"
                                 title="Select all in group"
-                                style="width:12px; height:14px; padding:0; font-size:10px; line-height:1; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0; padding:0; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
                                     callback.run(node_ids.clone());
                                 }
-                            >"☷"</button>
+                            >
+                                <MaterialIcon icon=md_icons::outlined::ICON_SELECT_ALL />
+                            </button>
                         }
                     })}
                     {on_ungroup.map(|callback| {
@@ -451,17 +450,38 @@ fn GroupLabel<N: NodeId>(
                             <button
                                 type="button"
                                 title="Ungroup"
-                                style="width:12px; height:14px; padding:0; font-size:10px; line-height:1; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin:0; padding:0; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
                                     callback.run(group_id.clone());
                                 }
-                            >"×"</button>
+                            >
+                                <MaterialIcon icon=md_icons::outlined::ICON_CLOSE />
+                            </button>
                         }
                     })}
             </span>
-        </span>
+        </div>
+    }
+}
+
+#[component]
+fn MaterialIcon(icon: &'static str) -> impl IntoView {
+    let mut svg = icon.to_string();
+    if let Some(position) = svg.find("<svg") {
+        svg.insert_str(
+            position.saturating_add(4),
+            " style=\"width:100%;height:100%;display:block;fill:currentColor\" aria-hidden=\"true\" focusable=\"false\"",
+        );
+    }
+
+    view! {
+        <span
+            aria-hidden="true"
+            style="width:14px;height:14px;display:inline-flex;flex:none;"
+            inner_html=svg
+        />
     }
 }
 
