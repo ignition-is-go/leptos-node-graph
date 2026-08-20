@@ -344,23 +344,24 @@ fn GroupLabel<N: NodeId>(
     let label_color = color.clone();
     let label_style = Signal::derive(move || {
         format!(
-            "position: absolute; top: 6px; left: 10px; z-index: 2; \
-         right: 10px; display: flex; align-items: center; justify-content: space-between; \
+            "position: absolute; top: 4px; left: 10px; z-index: 2; \
+         right: 10px; height: 16px; display: flex; align-items: center; justify-content: space-between; \
          font-size: {}; font-weight: {}; text-transform: uppercase; \
          letter-spacing: 0.05em; color: {label_color}; \
          background: transparent; \
-         padding: 2px 5px; border-radius: 3px; white-space: nowrap; \
+         padding: 0; line-height: 16px; border-radius: 3px; white-space: nowrap; \
          pointer-events: auto; cursor: default;",
             gs.label_font_size, gs.label_font_weight
         )
     });
 
     let input_style = format!(
-        "position: absolute; top: 4px; left: 20px; z-index: 2; \
+        "position: absolute; top: 3px; left: 20px; z-index: 2; height: 18px; \
+         line-height: 18px; \
          font-size: 10px; font-weight: 600; text-transform: uppercase; \
          letter-spacing: 0.05em; color: {color}; \
          background: transparent; border: 0; \
-         border-radius: 3px; padding: 1px 4px; outline: none; \
+         border-radius: 3px; padding: 0 4px; outline: none; \
          width: calc(100% - 56px); box-sizing: border-box; \
          pointer-events: auto;"
     );
@@ -412,7 +413,7 @@ fn GroupLabel<N: NodeId>(
             <button
                 type="button"
                 title="Change group color"
-                style=format!("position:absolute; top:6px; left:4px; width:10px; height:10px; padding:0; border:0; border-radius:50%; background:{}; cursor:pointer; pointer-events:auto;", group_color)
+                style=format!("position:absolute; top:7px; left:4px; width:10px; height:10px; padding:0; border:0; border-radius:50%; background:{}; cursor:pointer; pointer-events:auto;", group_color)
                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                 on:dblclick=|ev: web_sys::MouseEvent| ev.stop_propagation()
                 on:click={
@@ -429,14 +430,14 @@ fn GroupLabel<N: NodeId>(
                     }
                 }
             ></button>
-            <span style="position:absolute; top:50%; right:4px; transform:translateY(-50%); display:inline-flex; align-items:center; gap:6px;">
+            <span style="position:absolute; top:4px; right:4px; height:16px; display:inline-flex; align-items:center; gap:8px;">
                     {on_select_all.map(|callback| {
                         let node_ids = node_ids.clone();
                         view! {
                             <button
                                 type="button"
                                 title="Select all in group"
-                                style="width:12px; height:14px; padding:0; font-size:10px; line-height:1; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="width:16px; height:16px; padding:0; font-size:12px; line-height:16px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
@@ -451,7 +452,7 @@ fn GroupLabel<N: NodeId>(
                             <button
                                 type="button"
                                 title="Ungroup"
-                                style="width:12px; height:14px; padding:0; font-size:10px; line-height:1; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
+                                style="width:16px; height:16px; padding:0; font-size:14px; line-height:16px; pointer-events:auto; cursor:pointer; background:transparent; border:0; color:inherit; opacity:0.7;"
                                 on:mousedown=|ev: web_sys::MouseEvent| ev.stop_propagation()
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.stop_propagation();
