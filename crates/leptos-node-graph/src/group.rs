@@ -226,13 +226,16 @@ where
                 let bounds = compute_bounds(&group.node_ids, &nodes, &live_positions, padding)?;
 
                 let has_label = group.label.is_some();
-                let label_height = if has_label { 24.0 } else { 0.0 };
+                let header_height = if has_label { 24.0 } else { padding };
 
                 let final_bounds = GroupBounds {
                     x: bounds.x,
-                    y: bounds.y - label_height,
+                    // `bounds` already reserves `padding` above the first node.
+                    // The header replaces that top padding instead of stacking
+                    // another row above it.
+                    y: bounds.y + padding - header_height,
                     width: bounds.width,
-                    height: bounds.height + label_height,
+                    height: bounds.height + header_height - padding,
                 };
 
                 let gs = use_context::<GroupStyle>().unwrap_or_default();
