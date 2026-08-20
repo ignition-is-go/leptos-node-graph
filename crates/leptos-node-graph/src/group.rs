@@ -440,7 +440,7 @@ fn GroupLabel<N: NodeId>(
                                     callback.run(node_ids.clone());
                                 }
                             >
-                                <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M4 4h4v4H4V4m6 0h4v4h-4V4m6 0h4v4h-4V4M4 10h4v4H4v-4m6 0h4v4h-4v-4m6 0h4v4h-4v-4M4 16h4v4H4v-4m6 0h4v4h-4v-4m6 0h4v4h-4v-4Z"/></svg>
+                                <MaterialIcon icon=md_icons::outlined::ICON_SELECT_ALL />
                             </button>
                         }
                     })}
@@ -457,12 +457,31 @@ fn GroupLabel<N: NodeId>(
                                     callback.run(group_id.clone());
                                 }
                             >
-                                <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="m18.3 5.71-1.41-1.42L12 9.17 7.11 4.29 5.7 5.71l4.89 4.88-4.89 4.89 1.41 1.41L12 12l4.89 4.89 1.41-1.41-4.89-4.89 4.89-4.88Z"/></svg>
+                                <MaterialIcon icon=md_icons::outlined::ICON_CLOSE />
                             </button>
                         }
                     })}
             </span>
         </div>
+    }
+}
+
+#[component]
+fn MaterialIcon(icon: &'static str) -> impl IntoView {
+    let mut svg = icon.to_string();
+    if let Some(position) = svg.find("<svg") {
+        svg.insert_str(
+            position.saturating_add(4),
+            " style=\"width:100%;height:100%;display:block;fill:currentColor\" aria-hidden=\"true\" focusable=\"false\"",
+        );
+    }
+
+    view! {
+        <span
+            aria-hidden="true"
+            style="width:14px;height:14px;display:inline-flex;flex:none;"
+            inner_html=svg
+        />
     }
 }
 
