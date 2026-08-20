@@ -171,6 +171,7 @@ fn anchor_view<N, P, C, T>(
     direction: PortDirection,
     label: Option<String>,
     children: Option<Children>,
+    show_type: bool,
     dot_color: Option<String>,
     dot_shape: crate::theme::DotShape,
     dot_multi: bool,
@@ -617,12 +618,16 @@ where
     let as3 = as_.clone();
 
     let type_label = port_type.type_id();
-    let tooltip_label = match (direction, label.as_deref()) {
-        (PortDirection::Output, Some(label)) if label != type_label => {
-            format!("{label} ({type_label})")
+    let tooltip_label = if show_type {
+        match (direction, label.as_deref()) {
+            (PortDirection::Output, Some(label)) if label != type_label => {
+                format!("{label} ({type_label})")
+            }
+            (PortDirection::Output, Some(label)) => label.to_string(),
+            _ => type_label,
         }
-        (PortDirection::Output, Some(label)) => label.to_string(),
-        _ => type_label,
+    } else {
+        label.clone().unwrap_or(type_label)
     };
     let is_output = direction == PortDirection::Output;
 
@@ -922,6 +927,10 @@ pub fn InputAnchor<N, P, C, T>(
     #[prop(optional, into)] label: Option<String>,
     #[prop(optional)] _marker: PhantomData<(N, C)>,
     #[prop(optional)] children: Option<Children>,
+    /// Whether the compatibility type should be included in the socket tooltip.
+    /// This does not affect the registered `port_type`.
+    #[prop(default = true)]
+    show_type: bool,
     /// Per-anchor socket dot color override (fill + border in the idle state).
     /// When `None`, uses `AnchorStyle.dot_color`.
     #[prop(optional, into)]
@@ -946,6 +955,7 @@ where
         PortDirection::Input,
         label,
         children,
+        show_type,
         dot_color,
         dot_shape,
         dot_multi,
@@ -959,6 +969,10 @@ pub fn OutputAnchor<N, P, C, T>(
     #[prop(optional, into)] label: Option<String>,
     #[prop(optional)] _marker: PhantomData<(N, C)>,
     #[prop(optional)] children: Option<Children>,
+    /// Whether the compatibility type should be included in the socket tooltip.
+    /// This does not affect the registered `port_type`.
+    #[prop(default = true)]
+    show_type: bool,
     /// Per-anchor socket dot color override (fill + border in the idle state).
     /// When `None`, uses `AnchorStyle.dot_color`.
     #[prop(optional, into)]
@@ -983,6 +997,7 @@ where
         PortDirection::Output,
         label,
         children,
+        show_type,
         dot_color,
         dot_shape,
         dot_multi,
