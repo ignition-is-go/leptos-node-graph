@@ -1,0 +1,63 @@
+name: Quality gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Rust quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - name: Check for cargo-binstall
+        id: cargo-binstall
+        shell: bash
+        run: |
+          if command -v cargo-binstall >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install cargo-binstall
+        if: steps.cargo-binstall.outputs.available != 'true'
+        uses: cargo-bins/cargo-binstall@e00d2c94cc0067b77737821097a62d91c0301baa # v1.21.1
+        with:
+          version: "1.21.1"
+      - name: Install or update cargo-flux
+        run: cargo binstall cargo-flux --no-confirm --force
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Check Rust
+        run: cargo flux run check
+      - name: Run strict Clippy
+        run: cargo flux run lint
+      - name: Run tests
+        run: cargo flux run test
+      - name: Check WebAssembly target
+        run: cargo flux run check-wasm
+      - name: Verify crate is publishable
+        run: cargo publish --dry-run --locked --allow-dirty -p leptos-node-graph

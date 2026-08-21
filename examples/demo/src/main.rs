@@ -253,19 +253,20 @@ fn App() -> impl IntoView {
                 }
             });
         }
-        GroupEvent::NodeAdded { group_id, node_id } => {
+        GroupEvent::MembersChanged { group_id, node_ids } => {
             groups.update(|gs| {
-                if let Some(g) = gs.iter_mut().find(|g| g.id == group_id)
-                    && !g.node_ids.contains(&node_id)
-                {
-                    g.node_ids.push(node_id);
+                if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
+                    g.node_ids = node_ids;
                 }
             });
         }
-        GroupEvent::NodeRemoved { group_id, node_id } => {
+        GroupEvent::ColorChanged {
+            group_id,
+            new_color,
+        } => {
             groups.update(|gs| {
                 if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
-                    g.node_ids.retain(|id| id != &node_id);
+                    g.color = Some(new_color);
                 }
             });
         }

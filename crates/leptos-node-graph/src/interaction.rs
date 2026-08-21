@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use web_sys::{KeyboardEvent, MouseEvent, WheelEvent};
 
-use crate::registry::{BoxSelect, EditorRegistry};
+use crate::registry::{BoxSelect, DragState, EditorRegistry};
 use crate::types::*;
 use crate::utils;
 
@@ -134,6 +134,17 @@ pub fn handle_canvas_mousemove<N, P, C, T>(
             vp.pan_y += dy;
         });
         return;
+    }
+
+    // Alt can turn an ordinary drag into a group-transfer drag at any point in
+    // the gesture. Latch it before updating the position so GroupBoxOverlay
+    // observes the transition while the drag is still active.
+    if ev.alt_key()
+        && registry
+            .drag_state
+            .with_untracked(|drag| drag.as_ref().is_some_and(|drag| !drag.alt_key))
+    {
+        registry.drag_state.update(latch_group_transfer);
     }
 
     // Node dragging — store latest position and schedule RAF
@@ -473,6 +484,14 @@ pub fn handle_keydown<N, P, C, T>(
     C: ConnectionId,
     T: PortType,
 {
+    // A modifier press does not necessarily move the pointer. Latch Alt from
+    // the keyboard event too, so group-transfer mode starts immediately even
+    // while the cursor is stationary.
+    if ev.key() == "Alt" {
+        registry.drag_state.update(latch_group_transfer);
+        return;
+    }
+
     // Never hijack keys while the user is typing in a node's own controls: a
     // bare "f" would re-frame the graph mid-word, and Delete would delete the
     // selected nodes out from under them.
@@ -546,5 +565,32 @@ pub fn handle_keydown<N, P, C, T>(
         }
         // Tab is handled by the editor directly (opens menu)
         _ => {}
+    }
+}
+
+fn latch_group_transfer<N: NodeId>(drag: &mut Option<DragState<N>>) {
+    if let Some(drag) = drag {
+        drag.alt_key = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn alt_can_activate_group_transfer_after_drag_start() {
+        let mut drag = Some(DragState {
+            node_id: "node".to_string(),
+            offset: Position::new(10.0, 20.0),
+            start_positions: HashMap::from([("node".to_string(), Position::new(0.0, 0.0))]),
+            alt_key: false,
+        });
+
+        latch_group_transfer(&mut drag);
+
+        assert!(drag.unwrap().alt_key);
     }
 }

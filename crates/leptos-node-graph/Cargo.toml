@@ -2,6 +2,13 @@
 name = "leptos-node-graph"
 version = "0.1.0"
 edition = "2024"
+description = "A reactive node graph editor component for Leptos"
+documentation = "https://docs.rs/leptos-node-graph"
+homepage = "https://github.com/ignition-is-go/leptos-node-graph"
+repository = "https://github.com/ignition-is-go/leptos-node-graph"
+
+[package.metadata.flux]
+tasks = ["check", "check-wasm", "build", "test", "lint", "publish"]
 
 [dependencies]
 leptos = { version = "0.8", features = ["csr"] }
