@@ -82,7 +82,11 @@ jobs:
           cargo update --workspace
           cargo fmt --all
           git add -A
-          git commit -m "chore(release): v$VERSION"
+          if git diff --cached --quiet; then
+            echo "workspace is already stamped at v$VERSION; tagging the current commit"
+          else
+            git commit -m "chore(release): v$VERSION"
+          fi
           git tag "v$VERSION" -m "Release $VERSION"
           git push origin HEAD "v$VERSION"
           gh release create "v$VERSION" --title "v$VERSION" --generate-notes --latest
