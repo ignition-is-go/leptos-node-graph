@@ -1,0 +1,28 @@
+[channels]
+main = "production"
+
+[tasks.check]
+workspace_batchable = true
+cargo = ["cargo", "check", "--all-targets"]
+
+[tasks.check-wasm]
+workspace_batchable = true
+cargo = ["cargo", "check", "--target", "wasm32-unknown-unknown"]
+
+[tasks.build]
+workspace_batchable = true
+cargo = ["cargo", "build", "--locked"]
+
+[tasks.test]
+workspace_batchable = true
+cargo = ["cargo", "test", "--all-targets"]
+
+[tasks.lint]
+workspace_batchable = true
+cargo = ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"]
+
+[tasks.publish]
+cascade = "all"
+autoapply = "inherit"
+depends_on = ["build"]
+cargo = ["cargo", "publish", "--locked"]

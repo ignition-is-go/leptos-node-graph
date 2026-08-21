@@ -962,6 +962,7 @@ version = "0.1.0"
 dependencies = [
  "leptos",
  "leptos-use",
+ "md-icons",
  "web-sys",
 ]
 
@@ -1130,6 +1131,24 @@ dependencies = [
  "proc-macro-utils",
  "proc-macro2",
  "quote",
+]
+
+[[package]]
+name = "md-icons"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1b85cd9938707055bf990cc0adaeff16378f4d7604633d89c29eb6cc85312e5"
+dependencies = [
+ "md-icons-helper",
+]
+
+[[package]]
+name = "md-icons-helper"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c77f8c98addd0f07e9ffefa81160fafd8a0cdc31151b0f29156967629492ce20"
+dependencies = [
+ "regex",
 ]
 
 [[package]]
@@ -2396,23 +2415,3 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[patch.unused]]
-name = "autosocket"
-version = "6.2.0"
-
-[[patch.unused]]
-name = "myko"
-version = "6.2.0"
-
-[[patch.unused]]
-name = "myko-leptos"
-version = "6.2.0"
-
-[[patch.unused]]
-name = "myko-macros"
-version = "6.2.0"
-
-[[patch.unused]]
-name = "myko-server"
-version = "6.2.0"
