@@ -62,7 +62,10 @@ pub struct DragState<N: NodeId> {
     pub node_id: N,
     pub offset: Position,
     pub start_positions: HashMap<N, Position>,
-    /// Whether alt was held when the drag started.
+    /// Whether Alt has activated group transfer for this drag.
+    ///
+    /// This is latched once Alt is pressed, including after pointer-down, so
+    /// releasing the modifier before mouse-up does not cancel the transfer.
     pub alt_key: bool,
 }
 

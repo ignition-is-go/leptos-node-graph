@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{collections::HashSet, marker::PhantomData};
 
 use leptos::prelude::*;
 
@@ -44,10 +44,12 @@ impl GroupBounds {
 pub enum GroupEvent<N: NodeId> {
     /// Group label was renamed.
     Renamed { group_id: String, new_label: String },
-    /// A node was added to a group (alt+drag onto group box).
-    NodeAdded { group_id: String, node_id: N },
-    /// A node was removed from a group (alt+drag started).
-    NodeRemoved { group_id: String, node_id: N },
+    /// Group membership changed after an alt-drag gesture.
+    ///
+    /// The complete member list is emitted once per affected group so consumers
+    /// can persist the gesture atomically even when their reactive state updates
+    /// asynchronously or the drag moves several selected nodes.
+    MembersChanged { group_id: String, node_ids: Vec<N> },
     /// The group color chip was cycled.
     ColorChanged { group_id: String, new_color: String },
 }
@@ -105,8 +107,9 @@ where
 
     // Track which group the alt-dragged node is hovering over (for visual feedback)
     let hover_group: RwSignal<Option<String>> = RwSignal::new(None);
-    // Track previous drag info to detect start/end transitions
-    let prev_alt_drag: RwSignal<Option<N>> = RwSignal::new(None);
+    // Track every node moved by the previous alt-drag. A normal node drag can
+    // move the whole selection, so membership must follow the gesture batch.
+    let prev_alt_drag: RwSignal<Option<Vec<N>>> = RwSignal::new(None);
 
     let reg_drag = registry.clone();
     let on_event_drag = on_event;
@@ -117,59 +120,67 @@ where
         match (&drag, &prev) {
             // Alt-drag just started
             (Some(ds), None) if ds.alt_key => {
-                let node_id = ds.node_id.clone();
-                prev_alt_drag.set(Some(node_id.clone()));
-
-                // Immediately remove node from all its groups
-                if let Some(ref on_ev) = on_event_drag {
-                    let current_groups = groups.get_untracked();
-                    for group in &current_groups {
-                        if group.node_ids.contains(&node_id) {
-                            on_ev.run(GroupEvent::NodeRemoved {
-                                group_id: group.id.clone(),
-                                node_id: node_id.clone(),
-                            });
-                        }
-                    }
+                let mut node_ids: Vec<N> = ds.start_positions.keys().cloned().collect();
+                if node_ids.is_empty() {
+                    node_ids.push(ds.node_id.clone());
                 }
+                prev_alt_drag.set(Some(node_ids.clone()));
+
+                // Membership is previewed locally during the drag and persisted
+                // only on mouse-up. That keeps one gesture to one complete update
+                // per affected group, even for asynchronous consumers.
             }
             // Non-alt drag started — ignore
             (Some(_), None) => {}
-            // Alt-drag ended — check if node is over a group and add it
-            (None, Some(node_id)) => {
+            // Alt-drag ended — add each moved node to the first group containing
+            // its center, batching the final membership once per target group.
+            (None, Some(node_ids)) => {
                 prev_alt_drag.set(None);
                 hover_group.set(None);
 
                 if let Some(ref on_ev) = on_event_drag {
-                    // Get node's final center position
-                    let node_center = reg_drag.nodes.with_untracked(|nodes| {
-                        nodes.get(node_id).map(|n| {
-                            Position::new(
-                                n.position.x + n.size.width / 2.0,
-                                n.position.y + n.size.height / 2.0,
-                            )
-                        })
-                    });
+                    let moved: HashSet<N> = node_ids.iter().cloned().collect();
+                    let current_groups = groups.get_untracked();
+                    let nodes_map = reg_drag.nodes.get_untracked();
+                    let live_positions = reg_drag.live_positions.get_untracked();
+                    let base_members: Vec<Vec<N>> = current_groups
+                        .iter()
+                        .map(|group| members_without(&group.node_ids, &moved))
+                        .collect();
+                    let mut additions = vec![Vec::new(); current_groups.len()];
 
-                    if let Some(center) = node_center {
-                        // Check against current group bounds
-                        let current_groups = groups.get_untracked();
-                        let nodes_map = reg_drag.nodes.get_untracked();
-                        let live_positions = reg_drag.live_positions.get_untracked();
-                        for group in &current_groups {
-                            if let Some(bounds) = compute_bounds(
-                                &group.node_ids,
-                                &nodes_map,
-                                &live_positions,
-                                padding,
-                            ) && bounds.contains(center)
+                    for node_id in node_ids {
+                        let Some(node) = nodes_map.get(node_id) else {
+                            continue;
+                        };
+                        let center = Position::new(
+                            node.position.x + node.size.width / 2.0,
+                            node.position.y + node.size.height / 2.0,
+                        );
+                        for (index, members) in base_members.iter().enumerate() {
+                            if let Some(bounds) =
+                                compute_bounds(members, &nodes_map, &live_positions, padding)
+                                && bounds.contains(center)
                             {
-                                on_ev.run(GroupEvent::NodeAdded {
-                                    group_id: group.id.clone(),
-                                    node_id: node_id.clone(),
-                                });
+                                additions[index].push(node_id.clone());
                                 break;
                             }
+                        }
+                    }
+
+                    for ((group, mut members), added) in
+                        current_groups.iter().zip(base_members).zip(additions)
+                    {
+                        for node_id in added {
+                            if !members.contains(&node_id) {
+                                members.push(node_id);
+                            }
+                        }
+                        if members != group.node_ids {
+                            on_ev.run(GroupEvent::MembersChanged {
+                                group_id: group.id.clone(),
+                                node_ids: members,
+                            });
                         }
                     }
                 }
@@ -182,6 +193,7 @@ where
         if let Some(ref ds) = drag {
             if ds.alt_key {
                 let dragged_id = ds.node_id.clone();
+                let moved: HashSet<N> = ds.start_positions.keys().cloned().collect();
                 let all_nodes = reg_drag.nodes.get(); // reactive — triggers on position change
                 let node_center = all_nodes.get(&dragged_id).map(|n| {
                     Position::new(
@@ -195,8 +207,9 @@ where
                     let live_positions = reg_drag.live_positions.get();
                     let mut found = None;
                     for group in &current_groups {
+                        let members = members_without(&group.node_ids, &moved);
                         if let Some(bounds) =
-                            compute_bounds(&group.node_ids, &all_nodes, &live_positions, padding)
+                            compute_bounds(&members, &all_nodes, &live_positions, padding)
                             && bounds.contains(center)
                         {
                             found = Some(group.id.clone());
@@ -219,11 +232,17 @@ where
         let nodes = registry.nodes.get();
         let live_positions = registry.live_positions.get();
         let hovered = hover_group.get();
+        let moved: HashSet<N> = prev_alt_drag
+            .get()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
 
         groups
             .into_iter()
             .filter_map(|group| {
-                let bounds = compute_bounds(&group.node_ids, &nodes, &live_positions, padding)?;
+                let members = members_without(&group.node_ids, &moved);
+                let bounds = compute_bounds(&members, &nodes, &live_positions, padding)?;
 
                 let has_label = group.label.is_some();
                 let header_height = if has_label { 24.0 } else { padding };
@@ -496,6 +515,14 @@ fn next_group_color(current: &str) -> String {
     COLORS[(index + 1) % COLORS.len()].to_string()
 }
 
+fn members_without<N: NodeId>(node_ids: &[N], excluded: &HashSet<N>) -> Vec<N> {
+    node_ids
+        .iter()
+        .filter(|node_id| !excluded.contains(*node_id))
+        .cloned()
+        .collect()
+}
+
 /// Compute bounding box from a set of node IDs.
 fn compute_bounds<N: NodeId>(
     node_ids: &[N],
@@ -548,4 +575,62 @@ fn compute_bounds<N: NodeId>(
         width: (max_x - min_x) + padding * 2.0,
         height: (max_y - min_y) + padding * 2.0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use super::*;
+    use crate::registry::NodeEntry;
+
+    #[test]
+    fn removes_a_drag_batch_with_one_membership_update() {
+        let members = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let moved = HashSet::from(["a".to_string(), "c".to_string()]);
+
+        assert_eq!(members_without(&members, &moved), vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn drop_bounds_do_not_follow_the_dragged_member() {
+        let dragged = "dragged".to_string();
+        let anchor = "anchor".to_string();
+        let members = vec![dragged.clone(), anchor.clone()];
+        let moved = HashSet::from([dragged.clone()]);
+        let remaining = members_without(&members, &moved);
+        let nodes = HashMap::from([
+            (
+                dragged.clone(),
+                NodeEntry {
+                    id: dragged,
+                    position: Position::new(1_000.0, 1_000.0),
+                    size: Size {
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                    position_signal: None,
+                },
+            ),
+            (
+                anchor.clone(),
+                NodeEntry {
+                    id: anchor,
+                    position: Position::new(0.0, 0.0),
+                    size: Size {
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                    position_signal: None,
+                },
+            ),
+        ]);
+        let live_positions = nodes
+            .iter()
+            .map(|(id, node)| (id.clone(), node.position))
+            .collect();
+
+        let bounds = compute_bounds(&remaining, &nodes, &live_positions, 16.0).unwrap();
+        assert!(!bounds.contains(Position::new(1_050.0, 1_050.0)));
+    }
 }
