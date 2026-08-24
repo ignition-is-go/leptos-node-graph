@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
-use leptos_use::{UseElementSizeReturn, use_debounce_fn, use_element_size, use_event_listener};
+use leptos_use::{
+    UseElementSizeReturn, UseEventListenerOptions, use_debounce_fn, use_element_size,
+    use_event_listener, use_event_listener_with_options,
+};
 
 use crate::connection::ConnectionRenderer;
 use crate::group::GroupBoxOverlay;
@@ -250,9 +253,19 @@ where
 
     let reg_wh = registry.clone();
     let ref_wh = container_ref;
-    let on_wheel = move |ev: web_sys::WheelEvent| {
-        interaction::handle_wheel(&reg_wh, ev, &ref_wh);
-    };
+    // Wheel must be attached directly and explicitly non-passive. A normal
+    // `on:wheel` is delegated by Leptos to `window`, where browsers default
+    // wheel listeners to passive and silently ignore `prevent_default()`. The
+    // page can then scroll while the graph zooms, moving the editor underneath
+    // the pointer and making the zoom anchor appear to drift until a refresh.
+    let _wheel_cleanup = use_event_listener_with_options(
+        container_ref,
+        leptos::ev::wheel,
+        move |ev: web_sys::WheelEvent| {
+            interaction::handle_wheel(&reg_wh, ev, &ref_wh);
+        },
+        UseEventListenerOptions::default().passive(false),
+    );
 
     let reg_kd = registry.clone();
     let ref_kd = container_ref;
@@ -465,7 +478,6 @@ where
             node_ref=container_ref
             style=container_style
             on:mousedown=on_mousedown
-            on:wheel=on_wheel
             on:keydown=on_keydown
             on:dblclick=on_dblclick
         >
