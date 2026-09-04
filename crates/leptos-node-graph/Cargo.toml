@@ -27,5 +27,5 @@ web-sys = { version = "0.3", features = [
     # `Window::get_computed_style` — wheel routing checks a scroll box's overflow.
     "Window",
 ] }
-leptos-use = "0.18"
+leptos-use = "0.19"
 md-icons = "0.3.3"

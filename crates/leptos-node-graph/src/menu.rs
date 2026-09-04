@@ -624,7 +624,7 @@ fn scroll_selected_into_view() {
     } else {
         return;
     };
-    list.set_scroll_top((list.scroll_top() as f64 + delta).round() as i32);
+    list.scroll_by_with_x_and_y(0.0, delta);
 }
 
 fn request_animation_frame(f: impl FnOnce() + 'static) {
