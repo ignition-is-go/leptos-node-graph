@@ -22,18 +22,21 @@ jobs:
     runs-on: ci-public-linux-ephemeral
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
-      - run: sudo sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources && sudo apt-get update && sudo apt-get install -y build-essential pkg-config
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: ignition-is-go/pulse-actions/actions/setup-rust@2c94ebf4fedd47f0c36d491e0dee5ad446a071b5 # v1.0.0
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci
+          linux-dependencies: build
+          cache-shared-key: ci
+          compiler-cache-endpoint: ${{ secrets.CI_CACHE_ENDPOINT }}
+          compiler-cache-bucket: ${{ secrets.CI_CACHE_BUCKET }}
+          compiler-cache-access-key: ${{ secrets.CI_CACHE_ACCESS_KEY }}
+          compiler-cache-secret-key: ${{ secrets.CI_CACHE_SECRET_KEY }}
       - name: Check for cargo-binstall
         id: cargo-binstall
         shell: bash
@@ -62,3 +65,5 @@ jobs:
         run: cargo flux run check-wasm
       - name: Verify crate is publishable
         run: cargo publish --dry-run --locked --allow-dirty -p leptos-node-graph
+      - uses: ignition-is-go/pulse-actions/actions/report-resources@2c94ebf4fedd47f0c36d491e0dee5ad446a071b5 # v1.0.0
+        if: always()
