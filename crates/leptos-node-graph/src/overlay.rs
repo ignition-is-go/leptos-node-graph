@@ -59,23 +59,6 @@ pub struct NodeOverlayLayer {
     pub viewport: Signal<ViewportTransform>,
 }
 
-#[derive(Clone)]
-struct AnimationLoopState(Arc<AtomicBool>);
-
-impl AnimationLoopState {
-    fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(true)))
-    }
-
-    fn cancel(&self) {
-        self.0.store(false, Ordering::Relaxed);
-    }
-
-    fn is_active(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
-    }
-}
-
 /// What a [`NodeOverlay`] positions itself against.
 #[derive(Clone, Default)]
 pub enum OverlayAnchor {
@@ -309,12 +292,12 @@ pub fn NodeOverlay(
     // Everything else the panel should follow — node drags, resizes, content
     // reflow — is caught by re-placing each frame.
     if track_anchor {
-        let state = AnimationLoopState::new();
+        let state = Arc::new(AtomicBool::new(true));
         let cleanup_state = state.clone();
-        on_cleanup(move || cleanup_state.cancel());
+        on_cleanup(move || cleanup_state.store(false, Ordering::Relaxed));
 
-        fn tick(f: Arc<dyn Fn() + Send + Sync>, state: AnimationLoopState) {
-            if !state.is_active() {
+        fn tick(f: Arc<dyn Fn() + Send + Sync>, state: Arc<AtomicBool>) {
+            if !state.load(Ordering::Relaxed) {
                 return;
             }
             f();
@@ -412,12 +395,12 @@ mod tests {
     #[test]
     fn animation_loop_state_survives_owner_cleanup() {
         let owner = Owner::new();
-        let state = AnimationLoopState::new();
+        let state = Arc::new(AtomicBool::new(true));
         let cleanup_state = state.clone();
-        owner.with(|| on_cleanup(move || cleanup_state.cancel()));
+        owner.with(|| on_cleanup(move || cleanup_state.store(false, Ordering::Relaxed)));
 
         owner.cleanup();
 
-        assert!(!state.is_active());
+        assert!(!state.load(Ordering::Relaxed));
     }
 }
