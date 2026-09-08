@@ -31,6 +31,21 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
+      - name: Install GitHub CLI
+        shell: bash
+        run: |
+          if command -v gh >/dev/null 2>&1; then
+            exit 0
+          fi
+          sudo mkdir -p -m 755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg |
+            sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+          sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" |
+            sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y gh
+
       - name: Get GitHub App User ID
         id: get-user-id
         run: echo "user-id=$(gh api "/users/${{ steps.app-token.outputs.app-slug }}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
