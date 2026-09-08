@@ -33,7 +33,10 @@
 //! }
 //! ```
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use leptos::portal::Portal;
 use leptos::prelude::*;
@@ -54,6 +57,23 @@ pub struct NodeOverlayLayer {
     /// The live canvas transform. Overlays re-place when this changes, so they
     /// track their anchor across pan and zoom.
     pub viewport: Signal<ViewportTransform>,
+}
+
+#[derive(Clone)]
+struct AnimationLoopState(Arc<AtomicBool>);
+
+impl AnimationLoopState {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(true)))
+    }
+
+    fn cancel(&self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+
+    fn is_active(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
 }
 
 /// What a [`NodeOverlay`] positions itself against.
@@ -289,17 +309,18 @@ pub fn NodeOverlay(
     // Everything else the panel should follow — node drags, resizes, content
     // reflow — is caught by re-placing each frame.
     if track_anchor {
-        let alive = RwSignal::new(true);
-        on_cleanup(move || alive.set(false));
+        let state = AnimationLoopState::new();
+        let cleanup_state = state.clone();
+        on_cleanup(move || cleanup_state.cancel());
 
-        fn tick(f: Arc<dyn Fn() + Send + Sync>, alive: RwSignal<bool>) {
-            if !alive.get_untracked() {
+        fn tick(f: Arc<dyn Fn() + Send + Sync>, state: AnimationLoopState) {
+            if !state.is_active() {
                 return;
             }
             f();
-            crate::raf::request_animation_frame(move || tick(f, alive));
+            crate::raf::request_animation_frame(move || tick(f, state));
         }
-        tick(place, alive);
+        tick(place, state);
     }
 
     // Dismissal: a pointerdown that lands outside the panel, or Escape.
@@ -382,4 +403,21 @@ pub fn NodeOverlay(
         }}
     }
     .into_any()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animation_loop_state_survives_owner_cleanup() {
+        let owner = Owner::new();
+        let state = AnimationLoopState::new();
+        let cleanup_state = state.clone();
+        owner.with(|| on_cleanup(move || cleanup_state.cancel()));
+
+        owner.cleanup();
+
+        assert!(!state.is_active());
+    }
 }
