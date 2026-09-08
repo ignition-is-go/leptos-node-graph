@@ -33,7 +33,10 @@
 //! }
 //! ```
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use leptos::portal::Portal;
 use leptos::prelude::*;
@@ -289,17 +292,18 @@ pub fn NodeOverlay(
     // Everything else the panel should follow — node drags, resizes, content
     // reflow — is caught by re-placing each frame.
     if track_anchor {
-        let alive = RwSignal::new(true);
-        on_cleanup(move || alive.set(false));
+        let state = Arc::new(AtomicBool::new(true));
+        let cleanup_state = state.clone();
+        on_cleanup(move || cleanup_state.store(false, Ordering::Relaxed));
 
-        fn tick(f: Arc<dyn Fn() + Send + Sync>, alive: RwSignal<bool>) {
-            if !alive.get_untracked() {
+        fn tick(f: Arc<dyn Fn() + Send + Sync>, state: Arc<AtomicBool>) {
+            if !state.load(Ordering::Relaxed) {
                 return;
             }
             f();
-            crate::raf::request_animation_frame(move || tick(f, alive));
+            crate::raf::request_animation_frame(move || tick(f, state));
         }
-        tick(place, alive);
+        tick(place, state);
     }
 
     // Dismissal: a pointerdown that lands outside the panel, or Escape.
@@ -382,4 +386,21 @@ pub fn NodeOverlay(
         }}
     }
     .into_any()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animation_loop_state_survives_owner_cleanup() {
+        let owner = Owner::new();
+        let state = Arc::new(AtomicBool::new(true));
+        let cleanup_state = state.clone();
+        owner.with(|| on_cleanup(move || cleanup_state.store(false, Ordering::Relaxed)));
+
+        owner.cleanup();
+
+        assert!(!state.load(Ordering::Relaxed));
+    }
 }
