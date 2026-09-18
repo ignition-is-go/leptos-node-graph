@@ -26,10 +26,14 @@ jobs:
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: ignition-is-go/pulse-actions/actions/setup-rust@v1.1.1
         with:
           components: rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+          cache-shared-key: leptos-node-graph-release-v1
+          compiler-cache-endpoint: ${{ secrets.CI_CACHE_ENDPOINT }}
+          compiler-cache-bucket: ${{ secrets.CI_CACHE_BUCKET }}
+          compiler-cache-access-key: ${{ secrets.CI_CACHE_ACCESS_KEY }}
+          compiler-cache-secret-key: ${{ secrets.CI_CACHE_SECRET_KEY }}
 
       - name: Install GitHub CLI
         shell: bash
