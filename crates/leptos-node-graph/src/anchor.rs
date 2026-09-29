@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use leptos::prelude::*;
 use leptos_use::use_event_listener;
 
-use crate::node::NodeContext;
+use crate::node::{NodeContext, NodeElement};
 use crate::registry::EditorRegistry;
 use crate::types::*;
 
@@ -184,6 +184,7 @@ where
 {
     let registry = expect_context::<EditorRegistry<N, P, C, T>>();
     let node_ctx = expect_context::<NodeContext<N>>();
+    let node_ref = expect_context::<NodeElement>().0;
     let anchor_ref = NodeRef::<leptos::html::Div>::new();
     let dot_ref = NodeRef::<leptos::html::Div>::new();
 
@@ -204,56 +205,40 @@ where
         reg_cleanup.deregister_port(&id_cleanup);
     });
 
-    // Deterministic port position calculation — no DOM measurement needed.
-    // Uses node position, measured header/body heights, slot index, and row height.
+    // Rows can be inserted or reordered without remounting their keyed siblings.
+    // Measure the rendered dot rather than deriving its position from the order
+    // in which ports happened to register.
     let reg_pos = registry.clone();
     let id_pos = id.clone();
-    let anchor_style = use_context::<crate::theme::AnchorStyle>().unwrap_or_default();
-    let node_style = use_context::<crate::theme::NodeStyle>().unwrap_or_default();
-    let row_h = anchor_style.row_height;
-    let dot_inset = anchor_style.dot_inset;
-    let ports_pad_top = node_style.ports_padding_y;
-    // In Stacked layout, outputs render below the inputs in one column, so an
-    // output's row index must include the input count for its Y to line up.
-    let stacked = node_style.anchor_layout == crate::theme::AnchorLayout::Stacked;
 
     Effect::new(move || {
         let node_pos = node_ctx.position.get();
-        let ports_y = node_ctx.ports_y_offset.get();
-        let nw = node_ctx.node_width.get();
-
-        // Get this port's slot index, plus (in Stacked mode for outputs) the
-        // number of input rows that sit above this output column.
-        let (slot_idx, rows_above) = reg_pos.ports.with_untracked(|ports| {
-            let slot = ports.get(&id_pos).map(|p| p.slot_index).unwrap_or(0);
-            let above = if stacked && direction == PortDirection::Output {
-                ports
-                    .values()
-                    .filter(|p| p.node_id == node_ctx.id && p.direction == PortDirection::Input)
-                    .count()
-            } else {
-                0
-            };
-            (slot, above)
-        });
-        let row_idx = slot_idx + rows_above;
+        let _ports_y = node_ctx.ports_y_offset.get();
+        let _node_width = node_ctx.node_width.get();
+        let _ports_revision = node_ctx.ports_revision.get();
+        let (Some(dot), Some(node)) = (dot_ref.get(), node_ref.get()) else {
+            return;
+        };
 
         let is_dragging = reg_pos.drag_state.with_untracked(|ds| ds.is_some());
         if is_dragging {
             return; // batch_set_positions handles this
         }
 
-        let y = node_pos.y + ports_y + ports_pad_top + (row_idx as f64 * row_h) + (row_h / 2.0);
-        let x = match direction {
-            PortDirection::Input => node_pos.x + dot_inset,
-            PortDirection::Output => node_pos.x + nw - dot_inset,
-        };
-
-        let canvas_pos = Position::new(x, y);
+        let dot_rect = dot.get_bounding_client_rect();
+        if dot_rect.width() == 0.0 || dot_rect.height() == 0.0 {
+            return;
+        }
+        let node_rect = node.get_bounding_client_rect();
+        let zoom = reg_pos.viewport.get_untracked().zoom;
+        let offset = Position::new(
+            (dot_rect.x() + dot_rect.width() / 2.0 - node_rect.x()) / zoom,
+            (dot_rect.y() + dot_rect.height() / 2.0 - node_rect.y()) / zoom,
+        );
+        let canvas_pos = Position::new(node_pos.x + offset.x, node_pos.y + offset.y);
         reg_pos.set_port_position(&id_pos, canvas_pos);
 
         // Store offset for batch_set_positions during drag
-        let offset = Position::new(x - node_pos.x, y - node_pos.y);
         reg_pos.set_port_offset(&id_pos, offset);
     });
 

@@ -2,7 +2,11 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
-use leptos_use::{UseElementSizeReturn, use_element_size, use_event_listener};
+use leptos::wasm_bindgen::JsCast;
+use leptos_use::{
+    UseElementSizeReturn, UseMutationObserverOptions, use_element_size, use_event_listener,
+    use_mutation_observer_with_options,
+};
 
 use crate::registry::{DragState, EditorRegistry};
 // AnchorStyle is read by anchor.rs, not directly by node.rs
@@ -15,11 +19,12 @@ pub struct NodeContext<N: NodeId> {
     pub position: RwSignal<Position>,
     pub is_selected: Signal<bool>,
     pub is_dragging: Signal<bool>,
-    /// Measured height of the header + body sections above the ports.
-    /// Used by anchors for deterministic position calculation.
+    /// Measured offset of the port rows, used to refresh anchor positions.
     pub ports_y_offset: Signal<f64>,
-    /// Measured node width. Used by output anchors for X position.
+    /// Measured node width, used to refresh anchor positions.
     pub node_width: Signal<f64>,
+    /// Changes when this node's port rows mount, unmount, or move.
+    pub ports_revision: RwSignal<u64>,
 }
 
 /// The enclosing node's root element. Deliberately non-generic, so widgets in a
@@ -130,6 +135,29 @@ where
     let node_h = Signal::derive(move || measured.get().height);
 
     let ports_ref = NodeRef::<leptos::html::Div>::new();
+    let ports_revision = RwSignal::new(0);
+    // Keyed ports can move within a column without mounting or changing node
+    // size. Only direct row-list mutations affect pin positions.
+    use_mutation_observer_with_options(
+        ports_ref,
+        move |mutations, _| {
+            if mutations.iter().any(|mutation| {
+                mutation
+                    .target()
+                    .as_ref()
+                    .and_then(|target| target.dyn_ref::<web_sys::Element>())
+                    .is_some_and(|target| {
+                        target.has_attribute("data-node-inputs")
+                            || target.has_attribute("data-node-outputs")
+                    })
+            }) {
+                ports_revision.update(|revision| *revision += 1);
+            }
+        },
+        UseMutationObserverOptions::default()
+            .child_list(true)
+            .subtree(true),
+    );
 
     // Measure ports div offset from node top — exact, no padding math needed.
     // Re-derives when node height changes (triggered by header/body resize).
@@ -199,6 +227,7 @@ where
         is_dragging,
         ports_y_offset,
         node_width,
+        ports_revision,
     };
     provide_context(ctx);
     provide_context(NodeVisible(in_viewport.into()));
