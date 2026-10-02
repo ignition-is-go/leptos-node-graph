@@ -373,7 +373,16 @@ where
         // the next frame (after the menu element is gone).
         let refocus = container_ref;
         request_animation_frame(move || {
-            if let Some(el) = refocus.get_untracked() {
+            // A reopened menu or disposed pane invalidates this deferred work.
+            // Outside clicks may also have focused another pane's control.
+            if menu_open_at.try_get_untracked() != Some(None)
+                || document()
+                    .active_element()
+                    .is_some_and(|el| el.tag_name() != "BODY")
+            {
+                return;
+            }
+            if let Some(el) = refocus.try_get_untracked().flatten() {
                 let _ = el.focus();
             }
         });
