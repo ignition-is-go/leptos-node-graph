@@ -63,6 +63,31 @@ jobs:
         run: cargo flux run test
       - name: Check WebAssembly target
         run: cargo flux run check-wasm
+      - name: Install browser test tools
+        run: |
+          curl --fail --location --retry 3 https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz -o "$RUNNER_TEMP/trunk.tar.gz"
+          echo "f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b  $RUNNER_TEMP/trunk.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$CARGO_HOME/bin" trunk
+          trunk --version
+          sudo apt-get update
+          sudo apt-get install -y python3-venv
+          python3 -m venv .browser-venv
+          .browser-venv/bin/pip install -r tests/browser/requirements.txt
+          .browser-venv/bin/python -m playwright install --with-deps chromium
+      - name: Build browser fixture
+        working-directory: examples/demo
+        run: trunk build --locked
+      - name: Test node menu across pane boundaries
+        shell: bash
+        run: |
+          python3 -m http.server 8181 --bind 127.0.0.1 --directory examples/demo/dist > /tmp/node-menu-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for _ in {1..50}; do
+            if curl --fail --silent http://127.0.0.1:8181/ >/dev/null; then break; fi
+            sleep 0.1
+          done
+          .browser-venv/bin/python tests/browser/test_node_menu.py
       - name: Verify crate is publishable
         run: cargo publish --dry-run --locked --allow-dirty -p leptos-node-graph
       - uses: ignition-is-go/pulse-actions/actions/report-resources@2c94ebf4fedd47f0c36d491e0dee5ad446a071b5 # v1.0.0

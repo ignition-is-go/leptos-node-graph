@@ -1,4 +1,4 @@
-use leptos::prelude::*;
+use leptos::{portal::Portal, prelude::*};
 use leptos_use::use_event_listener;
 
 use crate::theme::NodeMenuStyle;
@@ -180,6 +180,7 @@ pub fn NodeMenu(
 
     let ms = use_context::<NodeMenuStyle>().unwrap_or_default();
     let input_ref = NodeRef::<leptos::html::Input>::new();
+    let menu_ref = NodeRef::<leptos::html::Div>::new();
     let (selected_index, set_selected_index) = signal(0usize);
 
     // Focus input when menu opens
@@ -188,7 +189,11 @@ pub fn NodeMenu(
             search_text.set(String::new());
             set_selected_index.set(0);
             request_animation_frame(move || {
-                if let Some(el) = input_ref.get_untracked() {
+                // The pane may have closed before this frame runs.
+                if open_at.try_get_untracked().flatten().is_none() {
+                    return;
+                }
+                if let Some(el) = input_ref.try_get_untracked().flatten() {
                     let _ = el.focus();
                 }
             });
@@ -206,8 +211,10 @@ pub fn NodeMenu(
             }
             if let Some(target) = ev.target() {
                 use leptos::wasm_bindgen::JsCast;
-                if let Some(el) = target.dyn_ref::<web_sys::Element>()
-                    && el.closest("[data-node-menu]").ok().flatten().is_some()
+                if let Some(target) = target.dyn_ref::<web_sys::Node>()
+                    && menu_ref
+                        .get_untracked()
+                        .is_some_and(|menu| menu.contains(Some(target)))
                 {
                     return;
                 }
@@ -321,8 +328,8 @@ pub fn NodeMenu(
     // frame covers layout that settles later and is a no-op when it doesn't.
     Effect::new(move || {
         let _ = selected_index.get();
-        scroll_selected_into_view();
-        request_animation_frame(scroll_selected_into_view);
+        scroll_selected_into_view(menu_ref);
+        request_animation_frame(move || scroll_selected_into_view(menu_ref));
     });
 
     // Reset selected index when the entry list changes
@@ -334,7 +341,7 @@ pub fn NodeMenu(
         }
     });
 
-    move || {
+    let render_menu = move || {
         let _canvas_pos = open_at.get()?;
         let sp = screen_pos.get()?;
 
@@ -361,7 +368,7 @@ pub fn NodeMenu(
         let top = sp.y.min((vh - MENU_H - 8.0).max(8.0)).max(8.0);
 
         let menu_style = format!(
-            "position: fixed; left: {}px; top: {}px; z-index: 10000;",
+            "position: fixed; left: {}px; top: {}px; z-index: 10000; width: min(240px, calc(100vw - 16px));",
             left, top,
         );
 
@@ -371,7 +378,7 @@ pub fn NodeMenu(
 
         let panel_style = format!(
             "background: {}; border: {}; border-radius: 8px; box-shadow: {}; \
-             min-width: 220px; max-height: 360px; display: flex; flex-direction: column; overflow: hidden;",
+             box-sizing: border-box; max-height: min(360px, calc(100vh - 16px)); display: flex; flex-direction: column; overflow: hidden;",
             ms.background, ms.border, ms.shadow
         );
         let search_wrapper_style = format!("padding: 8px; border-bottom: {};", ms.divider);
@@ -382,7 +389,7 @@ pub fn NodeMenu(
         );
 
         Some(view! {
-            <div style=menu_style data-node-menu="">
+            <div node_ref=menu_ref style=menu_style data-node-menu="">
                 <div style=panel_style>
                     <div style=search_wrapper_style>
                         <input
@@ -566,7 +573,11 @@ pub fn NodeMenu(
                 </div>
             </div>
         })
-    }
+    };
+
+    // Keep the reactive owner and theme context, but leave pane stacking and
+    // clipping ancestors. Only the popup escapes; graph overlays stay pane-local.
+    view! { <Portal>{render_menu.clone()}</Portal> }
 }
 
 /// The ports on `item` that could accept the in-flight draft connection.
@@ -602,15 +613,14 @@ fn compatible_ports(item: &NodeMenuItem, dc: &DraftContext) -> Vec<MenuPort> {
 /// `ScrollIntoViewOptions` feature. A row that's already visible doesn't move,
 /// which is what keeps mouse hover (which also sets the selection) from
 /// scrolling the list under the cursor.
-fn scroll_selected_into_view() {
-    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+fn scroll_selected_into_view(menu_ref: NodeRef<leptos::html::Div>) {
+    let Some(menu) = menu_ref.try_get_untracked().flatten() else {
         return;
     };
-    let Ok(Some(list)) = doc.query_selector("[data-node-menu] [data-node-menu-list]") else {
+    let Ok(Some(list)) = menu.query_selector("[data-node-menu-list]") else {
         return;
     };
-    let Ok(Some(item)) =
-        doc.query_selector("[data-node-menu] [data-node-menu-list] [data-menu-item-selected]")
+    let Ok(Some(item)) = menu.query_selector("[data-node-menu-list] [data-menu-item-selected]")
     else {
         return;
     };

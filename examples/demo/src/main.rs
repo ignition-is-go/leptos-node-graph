@@ -6,6 +6,7 @@ use leptos_node_graph::*;
 use web_sys::console;
 
 mod nodes;
+mod popup_regression;
 mod utils;
 mod widgets;
 use crate::nodes::build_node_registry;
@@ -46,7 +47,14 @@ impl PortType for DemoPort {
 // ---------------------------------------------------------------------------
 
 fn main() {
-    mount_to_body(App);
+    if web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .is_some_and(|query| query == "?popup-regression")
+    {
+        mount_to_body(popup_regression::PopupRegression);
+    } else {
+        mount_to_body(|| view! { <App /> });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +73,7 @@ struct DynNode {
 /// The full node type catalog with port definitions.
 
 #[component]
-fn App() -> impl IntoView {
+fn App(#[prop(default = false)] contained: bool) -> impl IntoView {
     let connections: RwSignal<HashMap<String, ConnectionEntry<String, String>>> =
         RwSignal::new(HashMap::new());
     let connections_signal = Signal::derive(move || connections.get());
@@ -276,9 +284,11 @@ fn App() -> impl IntoView {
         <style>"html, body { margin: 0; padding: 0; background: #18181b; color-scheme: dark; }"</style>
         <div
             data-drop-target=""
-            style="width: 100vw; height: 100vh; overflow: hidden; \
+            style=format!("width: {}; height: {}; overflow: hidden; \
                      font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; \
-                     font-size: 13px; color: #d4d4d8; box-sizing: border-box;"
+                     font-size: 13px; color: #d4d4d8; box-sizing: border-box;",
+                     if contained { "100%" } else { "100vw" },
+                     if contained { "100%" } else { "100vh" })
             // Drop handling lives on the WRAPPER, outside the editor, which is
             // where a cross-pane drag has to be caught. The editor's context
             // isn't reachable from here — `EditorHandle` is.

@@ -10,6 +10,6 @@ tasks = ["check", "check-wasm", "build", "test", "lint"]
 [dependencies]
 leptos = { version = "0.8", features = ["csr"] }
 leptos-node-graph = { path = "../../crates/leptos-node-graph" }
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = ["console", "Location"] }
 wasm-bindgen = "0.2"
 leptos-use = "0.19"
