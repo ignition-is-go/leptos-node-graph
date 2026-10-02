@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use leptos::prelude::*;
 
+use crate::keyed::{KeyedMap, KeyedSet};
 use crate::types::*;
 
 /// Entry for a registered node.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct NodeEntry<N: NodeId> {
     pub id: N,
     pub position: Position,
@@ -15,7 +16,7 @@ pub struct NodeEntry<N: NodeId> {
 }
 
 /// Entry for a registered port.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PortEntry<N: NodeId, P: PortId, T: PortType> {
     pub id: P,
     pub node_id: N,
@@ -29,7 +30,7 @@ pub struct PortEntry<N: NodeId, P: PortId, T: PortType> {
 }
 
 /// A connection between two ports.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ConnectionEntry<P: PortId, C: ConnectionId> {
     pub id: C,
     pub source: P,
@@ -94,13 +95,15 @@ where
     C: ConnectionId,
     T: PortType,
 {
-    pub nodes: RwSignal<HashMap<N, NodeEntry<N>>>,
+    pub nodes: KeyedMap<N, NodeEntry<N>>,
     /// Live positions written by the drag RAF, independent of persisted state.
-    pub live_positions: RwSignal<HashMap<N, Position>>,
-    pub ports: RwSignal<HashMap<P, PortEntry<N, P, T>>>,
-    pub connections: RwSignal<HashMap<C, ConnectionEntry<P, C>>>,
-    pub selected_nodes: RwSignal<HashSet<N>>,
-    pub selected_connections: RwSignal<HashSet<C>>,
+    pub live_positions: KeyedMap<N, Position>,
+    pub ports: KeyedMap<P, PortEntry<N, P, T>>,
+    pub connections: KeyedMap<C, ConnectionEntry<P, C>>,
+    pub node_ports: KeyedMap<N, HashSet<P>>,
+    pub port_connections: KeyedMap<P, HashSet<C>>,
+    pub selected_nodes: KeyedSet<N>,
+    pub selected_connections: KeyedSet<C>,
     pub draft_connection: RwSignal<Option<DraftConnection<P, T>>>,
     pub viewport: RwSignal<ViewportTransform>,
     /// A DEBOUNCED mirror of `viewport`, updated only after pan/zoom settles.
@@ -151,13 +154,23 @@ where
 {
     /// Create a new registry with the given configuration and event callback.
     pub fn new(config: EditorConfig, on_event: Callback<GraphEvent<N, P, C>>) -> Self {
-        Self {
-            nodes: RwSignal::new(HashMap::new()),
-            live_positions: RwSignal::new(HashMap::new()),
-            ports: RwSignal::new(HashMap::new()),
-            connections: RwSignal::new(HashMap::new()),
-            selected_nodes: RwSignal::new(HashSet::new()),
-            selected_connections: RwSignal::new(HashSet::new()),
+        Self::with_connections(config, on_event, KeyedMap::new())
+    }
+
+    pub fn with_connections(
+        config: EditorConfig,
+        on_event: Callback<GraphEvent<N, P, C>>,
+        connections: KeyedMap<C, ConnectionEntry<P, C>>,
+    ) -> Self {
+        let registry = Self {
+            nodes: KeyedMap::new(),
+            live_positions: KeyedMap::new(),
+            ports: KeyedMap::new(),
+            connections,
+            node_ports: KeyedMap::new(),
+            port_connections: KeyedMap::new(),
+            selected_nodes: KeyedSet::default(),
+            selected_connections: KeyedSet::default(),
             draft_connection: RwSignal::new(None),
             viewport: RwSignal::new(ViewportTransform::default()),
             visibility_viewport: RwSignal::new(ViewportTransform::default()),
@@ -172,7 +185,15 @@ where
             resize_state: RwSignal::new(None),
             pending_drag_pos: RwSignal::new(None),
             drag_raf_pending: RwSignal::new(false),
-        }
+        };
+        let reg = registry.clone();
+        connections.subscribe(move |id, old, new| reg.index_connection(id, old, new));
+        connections.with_untracked(|entries| {
+            for (id, entry) in entries {
+                registry.index_connection(id, None, Some(entry));
+            }
+        });
+        registry
     }
 
     /// Emit an event through the on_event callback.
@@ -180,59 +201,62 @@ where
         self.on_event.with_value(|cb| cb.run(event));
     }
 
-    /// Register a node at the given position.
+    fn index_connection(
+        &self,
+        id: &C,
+        old: Option<&ConnectionEntry<P, C>>,
+        new: Option<&ConnectionEntry<P, C>>,
+    ) {
+        let mut ports = HashSet::new();
+        for connection in old.into_iter().chain(new) {
+            ports.insert(connection.source.clone());
+            ports.insert(connection.target.clone());
+        }
+        for port in ports {
+            let mut ids = self
+                .port_connections
+                .get_untracked(&port)
+                .unwrap_or_default();
+            ids.remove(id);
+            if new.is_some_and(|connection| connection.source == port || connection.target == port)
+            {
+                ids.insert(id.clone());
+            }
+            if ids.is_empty() {
+                self.port_connections.remove(&port);
+            } else {
+                self.port_connections.insert(port, ids);
+            }
+        }
+    }
+
     pub fn register_node(
         &self,
         id: N,
         position: Position,
         position_signal: Option<RwSignal<Position>>,
     ) {
-        self.nodes.update(|nodes| {
-            nodes.insert(
-                id.clone(),
-                NodeEntry {
-                    id: id.clone(),
-                    position,
-                    size: Size::default(),
-                    position_signal,
-                },
-            );
-        });
-        self.live_positions.update(|positions| {
-            positions.insert(id, position);
-        });
+        self.nodes.insert(
+            id.clone(),
+            NodeEntry {
+                id: id.clone(),
+                position,
+                size: Size::default(),
+                position_signal,
+            },
+        );
+        self.live_positions.insert(id, position);
     }
 
-    /// Deregister a node, cascading removal of its ports and their connections.
     pub fn deregister_node(&self, id: &N) {
-        // Collect ports belonging to this node.
-        let port_ids: Vec<P> = self.ports.with_untracked(|ports| {
-            ports
-                .values()
-                .filter(|entry| &entry.node_id == id)
-                .map(|entry| entry.id.clone())
-                .collect()
-        });
-
-        // Deregister each port (which also removes its connections).
-        for port_id in port_ids {
-            self.deregister_port(&port_id);
+        for port in self.node_ports.get_untracked(id).unwrap_or_default() {
+            self.deregister_port(&port);
         }
-
-        self.nodes.update(|nodes| {
-            nodes.remove(id);
-        });
-        self.live_positions.update(|positions| {
-            positions.remove(id);
-        });
-
-        self.selected_nodes.update(|sel| {
-            sel.remove(id);
-        });
+        self.nodes.remove(id);
+        self.live_positions.remove(id);
+        self.selected_nodes.remove(id);
     }
 
-    /// Register a port. Invalidates cached offsets for all sibling ports on the same node
-    /// since the new port may shift their visual positions.
     pub fn register_port(
         &self,
         id: P,
@@ -241,215 +265,121 @@ where
         port_type: T,
         position: Position,
     ) {
-        self.ports.update(|ports| {
-            // New port gets the next index for this node+direction
-            let next_idx = ports
-                .values()
-                .filter(|p| p.node_id == node_id && p.direction == direction)
-                .count();
-
-            // Invalidate offsets for existing sibling ports (positions may shift)
-            for entry in ports.values_mut() {
-                if entry.node_id == node_id {
-                    entry.offset = None;
-                }
-            }
-
-            ports.insert(
-                id.clone(),
-                PortEntry {
-                    id,
-                    node_id,
-                    direction,
-                    port_type,
-                    position,
-                    slot_index: next_idx,
-                    offset: None,
-                },
-            );
-        });
-    }
-
-    /// Deregister a port. Connections referencing this port are kept in the
-    /// consumer's data but not rendered (the connection renderer skips connections
-    /// with missing ports). This allows connections to restore if the port reappears.
-    pub fn deregister_port(&self, id: &P) {
-        // Get the node_id and direction before removing
-        let port_info = self
-            .ports
-            .with_untracked(|ports| ports.get(id).map(|p| (p.node_id.clone(), p.direction)));
-
-        self.ports.update(|ports| {
-            ports.remove(id);
-
-            // Reindex siblings preserving their original order
-            if let Some((node_id, direction)) = &port_info {
-                let mut siblings: Vec<(usize, P)> = ports
-                    .values()
-                    .filter(|p| &p.node_id == node_id && p.direction == *direction)
-                    .map(|p| (p.slot_index, p.id.clone()))
-                    .collect();
-                siblings.sort_by_key(|(idx, _)| *idx);
-
-                for (new_idx, (_, port_id)) in siblings.into_iter().enumerate() {
-                    if let Some(entry) = ports.get_mut(&port_id) {
-                        entry.slot_index = new_idx;
-                        entry.offset = None;
-                    }
-                }
-            }
-        });
-    }
-
-    /// Update a node's position.
-    pub fn set_node_position(&self, id: &N, position: Position) {
-        self.nodes.maybe_update(|nodes| {
-            let Some(entry) = nodes.get_mut(id) else {
-                return false;
-            };
-            if entry.position == position {
-                return false;
-            }
-            entry.position = position;
-            true
-        });
-        self.live_positions.update(|positions| {
-            positions.insert(id.clone(), position);
-        });
-    }
-
-    /// Update a node's position and its consumer signal. Used during drag for live feedback.
-    pub fn set_node_position_with_signal(&self, id: &N, position: Position) {
-        let mut signal = None;
-        self.nodes.maybe_update(|nodes| {
-            let Some(entry) = nodes.get_mut(id) else {
-                return false;
-            };
-            signal = entry.position_signal;
-            if entry.position == position {
-                return false;
-            }
-            entry.position = position;
-            true
-        });
-        if let Some(signal) = signal
-            && signal.get_untracked() != position
+        if let Some(old) = self.ports.get_untracked(&id)
+            && old.node_id != node_id
         {
-            signal.set(position);
+            self.deregister_port(&id);
         }
-        self.live_positions.update(|positions| {
-            positions.insert(id.clone(), position);
-        });
+        let mut siblings = self.node_ports.get_untracked(&node_id).unwrap_or_default();
+        let mut next_idx = 0;
+        for sibling in &siblings {
+            if let Some(port) = self.ports.get_untracked(sibling) {
+                if port.direction == direction {
+                    next_idx += 1;
+                }
+                self.ports.update(sibling, |port| port.offset = None);
+            }
+        }
+        siblings.insert(id.clone());
+        self.node_ports.insert(node_id.clone(), siblings);
+        self.ports.insert(
+            id.clone(),
+            PortEntry {
+                id,
+                node_id,
+                direction,
+                port_type,
+                position,
+                slot_index: next_idx,
+                offset: None,
+            },
+        );
     }
 
-    /// Batch-update positions for multiple nodes during drag.
-    /// Updates node entries, port positions (via cached offsets), and position signals.
-    /// Each map notifies at most once, and only when at least one value changed.
-    pub fn batch_set_positions(&self, updates: &[(N, Position)]) {
-        // 1. Update node entries and collect only consumer signals that changed.
-        let mut node_signals = Vec::new();
-        let mut node_moves = HashMap::new();
-        self.nodes.maybe_update(|nodes| {
-            let mut changed = false;
-            for (id, position) in updates {
-                let Some(entry) = nodes.get_mut(id) else {
-                    continue;
-                };
-                if entry.position == *position {
-                    if let Some(signal) = entry.position_signal
-                        && signal.get_untracked() != *position
-                    {
-                        node_signals.push((signal, *position));
-                    }
-                    continue;
-                }
-                let delta =
-                    Position::new(position.x - entry.position.x, position.y - entry.position.y);
-                entry.position = *position;
-                node_moves.insert(id.clone(), (*position, delta));
-                if let Some(signal) = entry.position_signal {
-                    node_signals.push((signal, *position));
-                }
-                changed = true;
-            }
-            changed
-        });
-        // 2. Batch-update port positions. Measured ports use their exact cached
-        // offset; dynamic siblings whose offset was invalidated still follow
-        // the node by translating their last known absolute position.
-        self.ports.maybe_update(|ports| {
-            let mut changed = false;
-            for entry in ports.values_mut() {
-                let Some((new_node_position, delta)) = node_moves.get(&entry.node_id) else {
-                    continue;
-                };
-                let position = match entry.offset {
-                    Some(offset) => Position::new(
-                        new_node_position.x + offset.x,
-                        new_node_position.y + offset.y,
-                    ),
-                    None => Position::new(entry.position.x + delta.x, entry.position.y + delta.y),
-                };
-                if entry.position != position {
-                    entry.position = position;
-                    changed = true;
-                }
-            }
-            changed
-        });
+    /// Authored connections survive a missing port and restore when it returns.
+    pub fn deregister_port(&self, id: &P) {
+        let Some(port) = self.ports.get_untracked(id) else {
+            return;
+        };
+        self.ports.remove(id);
+        let mut siblings = self
+            .node_ports
+            .get_untracked(&port.node_id)
+            .unwrap_or_default();
+        siblings.remove(id);
+        let mut ordered: Vec<_> = siblings
+            .iter()
+            .filter_map(|id| self.ports.get_untracked(id))
+            .filter(|sibling| sibling.direction == port.direction)
+            .collect();
+        ordered.sort_by_key(|sibling| sibling.slot_index);
+        for (index, sibling) in ordered.into_iter().enumerate() {
+            self.ports.update(&sibling.id, |entry| {
+                entry.slot_index = index;
+                entry.offset = None;
+            });
+        }
+        if siblings.is_empty() {
+            self.node_ports.remove(&port.node_id);
+        } else {
+            self.node_ports.insert(port.node_id, siblings);
+        }
+    }
 
-        // 3. Set position signals (drives CSS node positioning via style=).
-        for (signal, position) in node_signals {
-            if signal.get_untracked() != position {
+    pub fn set_node_position(&self, id: &N, position: Position) {
+        self.nodes.update(id, |entry| entry.position = position);
+        self.live_positions.insert(id.clone(), position);
+    }
+    pub fn set_node_position_with_signal(&self, id: &N, position: Position) {
+        if let Some(node) = self.nodes.get_untracked(id) {
+            self.set_node_position(id, position);
+            if let Some(signal) = node.position_signal
+                && signal.get_untracked() != position
+            {
                 signal.set(position);
             }
         }
-        self.live_positions.update(|positions| {
+    }
+    pub fn batch_set_positions(&self, updates: &[(N, Position)]) {
+        batch(|| {
             for (id, position) in updates {
-                positions.insert(id.clone(), *position);
+                let Some(node) = self.nodes.get_untracked(id) else {
+                    continue;
+                };
+                if node.position != *position {
+                    let delta =
+                        Position::new(position.x - node.position.x, position.y - node.position.y);
+                    self.set_node_position(id, *position);
+                    for port in self.node_ports.get_untracked(id).unwrap_or_default() {
+                        self.ports.update(&port, |entry| {
+                            entry.position = match entry.offset {
+                                Some(offset) => {
+                                    Position::new(position.x + offset.x, position.y + offset.y)
+                                }
+                                None => Position::new(
+                                    entry.position.x + delta.x,
+                                    entry.position.y + delta.y,
+                                ),
+                            };
+                        });
+                    }
+                }
+                if let Some(signal) = node.position_signal
+                    && signal.get_untracked() != *position
+                {
+                    signal.set(*position);
+                }
             }
         });
     }
-
-    /// Update a node's size.
     pub fn set_node_size(&self, id: &N, size: Size) {
-        self.nodes.maybe_update(|nodes| {
-            let Some(entry) = nodes.get_mut(id) else {
-                return false;
-            };
-            if entry.size == size {
-                return false;
-            }
-            entry.size = size;
-            true
-        });
+        self.nodes.update(id, |node| node.size = size);
     }
-
-    /// Update a port's absolute canvas-space position.
     pub fn set_port_position(&self, id: &P, position: Position) {
-        self.ports.maybe_update(|ports| {
-            let Some(entry) = ports.get_mut(id) else {
-                return false;
-            };
-            if entry.position == position {
-                return false;
-            }
-            entry.position = position;
-            true
-        });
+        self.ports.update(id, |port| port.position = position);
     }
-
-    /// Set a port's cached offset from its node position.
     pub fn set_port_offset(&self, id: &P, offset: Position) {
-        let mut guard = self.ports.write_untracked();
-        if let Some(entry) = guard.get_mut(id) {
-            entry.offset = Some(offset);
-        }
-    }
-
-    /// Replace the entire connections map (used by the consumer to sync state).
-    pub fn set_connections(&self, connections: HashMap<C, ConnectionEntry<P, C>>) {
-        self.connections.set(connections);
+        self.ports.update(id, |port| port.offset = Some(offset));
     }
 
     /// Get a port's position (untracked read).
@@ -499,35 +429,39 @@ where
 
     /// Select a single node, clearing all other selections.
     pub fn select_node(&self, id: N) {
-        self.selected_connections.update(|sel| sel.clear());
-        self.selected_nodes.update(|sel| {
-            sel.clear();
-            sel.insert(id);
-        });
+        self.selected_connections.clear();
+        self.selected_nodes.clear();
+        self.selected_nodes.insert(id);
     }
 
     /// Toggle a node's selection state (for shift+click).
     pub fn toggle_node_selection(&self, id: N) {
-        self.selected_nodes.update(|sel| {
-            if !sel.remove(&id) {
-                sel.insert(id);
-            }
-        });
+        if self.selected_nodes.contains_untracked(&id) {
+            self.selected_nodes.remove(&id);
+        } else {
+            self.selected_nodes.insert(id);
+        }
     }
 
     /// Select a single connection, clearing all other selections.
     pub fn select_connection(&self, id: C) {
-        self.selected_nodes.update(|sel| sel.clear());
-        self.selected_connections.update(|sel| {
-            sel.clear();
-            sel.insert(id);
-        });
+        self.selected_nodes.clear();
+        self.selected_connections.clear();
+        self.selected_connections.insert(id);
+    }
+
+    pub fn toggle_connection_selection(&self, id: C) {
+        if self.selected_connections.contains_untracked(&id) {
+            self.selected_connections.remove(&id);
+        } else {
+            self.selected_connections.insert(id);
+        }
     }
 
     /// Clear all selections.
     pub fn clear_selection(&self) {
-        self.selected_nodes.update(|sel| sel.clear());
-        self.selected_connections.update(|sel| sel.clear());
+        self.selected_nodes.clear();
+        self.selected_connections.clear();
     }
 
     /// Select all nodes.
@@ -704,6 +638,49 @@ mod tests {
     }
 
     #[test]
+    fn point_geometry_and_selection_ignore_other_nodes_with_large_background() {
+        for background in [10, 1000] {
+            Owner::new().with(|| {
+                let registry = EditorRegistry::<usize, usize, usize, TestPortType>::new(
+                    EditorConfig::default(),
+                    Callback::new(|_| {}),
+                );
+                for id in 0..=background {
+                    registry.register_node(id, Position::new(id as f64 * 1000.0, 0.0), None);
+                }
+                let reads = Arc::new(AtomicUsize::new(0));
+                let count = reads.clone();
+                let nodes = registry.nodes;
+                let selection = registry.selected_nodes;
+                let other = Memo::new(move |_| {
+                    count.fetch_add(1, Ordering::Relaxed);
+                    (
+                        nodes.get(&1).map(|node| node.position),
+                        selection.contains(&1),
+                    )
+                });
+                let target = Memo::new(move |_| {
+                    (
+                        nodes.get(&0).map(|node| node.position),
+                        selection.contains(&0),
+                    )
+                });
+                let before = other.get();
+                let target_before = target.get();
+                registry.batch_set_positions(&[(0, Position::new(50.0, 50.0))]);
+                registry.toggle_node_selection(0);
+                assert_eq!(other.get(), before);
+                assert_eq!(reads.load(Ordering::Relaxed), 1);
+                assert_ne!(target.get(), target_before);
+                registry.deregister_node(&0);
+                assert_eq!(other.get(), before);
+                assert_eq!(reads.load(Ordering::Relaxed), 1);
+                assert_eq!(target.get(), (None, false));
+            });
+        }
+    }
+
+    #[test]
     fn geometry_writes_gate_noops_and_translate_offsetless_ports() {
         Owner::new().with(|| {
             let registry = EditorRegistry::<String, String, String, TestPortType>::new(
@@ -737,7 +714,9 @@ mod tests {
             let nodes = registry.nodes;
             let node_geometry = Memo::new(move |_| {
                 node_reads_memo.fetch_add(1, Ordering::Relaxed);
-                nodes.with(|nodes| nodes.get("node").map(|node| (node.position, node.size)))
+                nodes
+                    .get(&"node".to_string())
+                    .map(|node| (node.position, node.size))
             });
 
             let port_reads = Arc::new(AtomicUsize::new(0));
@@ -745,12 +724,10 @@ mod tests {
             let ports = registry.ports;
             let port_geometry = Memo::new(move |_| {
                 port_reads_memo.fetch_add(1, Ordering::Relaxed);
-                ports.with(|ports| {
-                    Some((
-                        ports.get("port")?.position,
-                        ports.get("dynamic-port")?.position,
-                    ))
-                })
+                Some((
+                    ports.get(&"port".to_string())?.position,
+                    ports.get(&"dynamic-port".to_string())?.position,
+                ))
             });
 
             assert!(node_geometry.get().is_some());

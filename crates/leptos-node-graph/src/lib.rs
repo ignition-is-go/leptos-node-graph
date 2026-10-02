@@ -4,6 +4,7 @@ pub mod editor;
 pub mod group;
 pub mod history;
 pub mod interaction;
+pub mod keyed;
 pub mod layout;
 pub mod menu;
 pub mod node;
@@ -11,6 +12,7 @@ pub mod node_types;
 pub mod overlay;
 pub mod raf;
 pub mod registry;
+pub mod routing;
 pub mod selection;
 pub mod subway;
 pub mod theme;
@@ -25,6 +27,7 @@ pub use connection::{ConnectionStyle, RoutingMode};
 pub use editor::{EditorHandle, NodeEditor};
 pub use group::{GroupBounds, GroupBox, GroupBoxOverlay, GroupEvent};
 pub use history::UndoHistory;
+pub use keyed::{KeyedChange, KeyedMap, KeyedSet};
 pub use layout::{LayoutEngine, LayoutGraph};
 pub use menu::{
     Category, DraftContext, MenuPort, NodeMenu, NodeMenuContext, NodeMenuEvent, NodeMenuItem,

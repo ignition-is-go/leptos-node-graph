@@ -2,12 +2,13 @@ use std::{collections::HashSet, marker::PhantomData};
 
 use leptos::prelude::*;
 
+use crate::keyed::KeyedMap;
 use crate::registry::EditorRegistry;
 use crate::theme::GroupStyle;
 use crate::types::*;
 
 /// Defines a visual group box around a set of nodes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GroupBox<N: NodeId> {
     /// Unique group identifier.
     pub id: String,
@@ -64,7 +65,7 @@ pub enum GroupEvent<N: NodeId> {
 #[component]
 pub fn GroupBoxOverlay<N, P, C, T>(
     /// Reactive list of group definitions.
-    groups: Signal<Vec<GroupBox<N>>>,
+    groups: KeyedMap<String, GroupBox<N>>,
     /// Callback for group events (rename, add/remove node).
     #[prop(optional, into)]
     on_event: Option<Callback<GroupEvent<N>>>,
@@ -140,9 +141,10 @@ where
 
                 if let Some(ref on_ev) = on_event_drag {
                     let moved: HashSet<N> = node_ids.iter().cloned().collect();
-                    let current_groups = groups.get_untracked();
-                    let nodes_map = reg_drag.nodes.get_untracked();
-                    let live_positions = reg_drag.live_positions.get_untracked();
+                    let current_groups = groups
+                        .with_untracked(|groups| groups.values().cloned().collect::<Vec<_>>());
+                    let nodes_map = reg_drag.nodes.with_untracked(Clone::clone);
+                    let live_positions = reg_drag.live_positions.with_untracked(Clone::clone);
                     let base_members: Vec<Vec<N>> = current_groups
                         .iter()
                         .map(|group| members_without(&group.node_ids, &moved))
@@ -194,8 +196,8 @@ where
             if ds.alt_key {
                 let dragged_id = ds.node_id.clone();
                 let moved: HashSet<N> = ds.start_positions.keys().cloned().collect();
-                let all_nodes = reg_drag.nodes.get(); // reactive — triggers on position change
-                let node_center = all_nodes.get(&dragged_id).map(|n| {
+                let all_nodes = reg_drag.nodes.with_untracked(Clone::clone);
+                let node_center = reg_drag.nodes.get(&dragged_id).map(|n| {
                     Position::new(
                         n.position.x + n.size.width / 2.0,
                         n.position.y + n.size.height / 2.0,
@@ -203,8 +205,9 @@ where
                 });
 
                 if let Some(center) = node_center {
-                    let current_groups = groups.get_untracked();
-                    let live_positions = reg_drag.live_positions.get();
+                    let current_groups = groups
+                        .with_untracked(|groups| groups.values().cloned().collect::<Vec<_>>());
+                    let live_positions = reg_drag.live_positions.with_untracked(Clone::clone);
                     let mut found = None;
                     for group in &current_groups {
                         let members = members_without(&group.node_ids, &moved);
@@ -224,24 +227,16 @@ where
         }
     });
 
-    // Render groups
-    move || {
-        let groups = groups.get();
-        // `compute_bounds` reads each node's live consumer-owned position
-        // signal, while this map read tracks membership and measured sizes.
-        let nodes = registry.nodes.get();
-        let live_positions = registry.live_positions.get();
-        let hovered = hover_group.get();
-        let moved: HashSet<N> = prev_alt_drag
-            .get()
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-
-        groups
-            .into_iter()
-            .filter_map(|group| {
+    view! {
+        <For each=move || groups.keys() key=|id| id.clone() children=move |group_id| {
+            let registry = registry.clone();
+            move || {
+                let hovered = hover_group.get();
+                let moved: HashSet<N> = prev_alt_drag.get().unwrap_or_default().into_iter().collect();
+                groups.get(&group_id).into_iter().filter_map(|group| {
                 let members = members_without(&group.node_ids, &moved);
+                let nodes = members.iter().filter_map(|id| registry.nodes.get(id).map(|node|(id.clone(),node))).collect();
+                let live_positions = members.iter().filter_map(|id| registry.live_positions.get(id).map(|position|(id.clone(),position))).collect();
                 let bounds = compute_bounds(&members, &nodes, &live_positions, padding)?;
 
                 let has_label = group.label.is_some();
@@ -344,6 +339,8 @@ where
                 })
             })
             .collect_view()
+            }
+        } />
     }
 }
 

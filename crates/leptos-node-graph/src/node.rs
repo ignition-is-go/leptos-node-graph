@@ -203,8 +203,7 @@ where
     // Derived state signals
     let id_sel = id.clone();
     let reg_sel = registry.clone();
-    let is_selected =
-        Signal::derive(move || reg_sel.selected_nodes.with(|sel| sel.contains(&id_sel)));
+    let is_selected = Signal::derive(move || reg_sel.selected_nodes.contains(&id_sel));
 
     let id_drag = id.clone();
     let reg_drag = registry.clone();

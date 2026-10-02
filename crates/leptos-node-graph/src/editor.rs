@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
@@ -10,6 +9,7 @@ use leptos_use::{
 use crate::connection::ConnectionRenderer;
 use crate::group::GroupBoxOverlay;
 use crate::interaction;
+use crate::keyed::KeyedMap;
 use crate::menu::{DraftContext, NodeMenu, NodeMenuEvent, NodeMenuItem};
 use crate::registry::{ConnectionEntry, EditorRegistry};
 use crate::selection::SelectionBox;
@@ -110,7 +110,7 @@ impl EditorHandle {
 #[component]
 pub fn NodeEditor<N, P, C, T>(
     #[prop(into)] config: EditorConfig,
-    #[prop(into)] connections: Signal<HashMap<C, ConnectionEntry<P, C>>>,
+    connections: KeyedMap<C, ConnectionEntry<P, C>>,
     on_event: Callback<GraphEvent<N, P, C>>,
     #[prop(optional)] _marker: PhantomData<T>,
     /// Optional node catalog for the creation menu.
@@ -123,7 +123,7 @@ pub fn NodeEditor<N, P, C, T>(
     menu_search: Option<RwSignal<String>>,
     /// Optional groups to render as visual overlays behind nodes.
     #[prop(optional, into)]
-    groups: Option<Signal<Vec<crate::group::GroupBox<N>>>>,
+    groups: Option<KeyedMap<String, crate::group::GroupBox<N>>>,
     /// Callback for group events (rename, add/remove node).
     #[prop(optional, into)]
     on_group_event: Option<Callback<crate::group::GroupEvent<N>>>,
@@ -149,7 +149,8 @@ where
     // A handle owns the viewport signal and the container ref outright, rather
     // than being kept in sync with internal copies — two-way mirroring of a
     // signal that both sides write is a feedback loop waiting to happen.
-    let mut registry = EditorRegistry::<N, P, C, T>::new(config, on_event);
+    let mut registry =
+        EditorRegistry::<N, P, C, T>::with_connections(config, on_event, connections);
     if let Some(h) = handle {
         registry.viewport = h.viewport;
     }
@@ -214,13 +215,6 @@ where
         if let Some(el) = container_ref.get() {
             let _ = el.focus();
         }
-    });
-
-    // Sync external connections into registry
-    let reg = registry.clone();
-    Effect::new(move || {
-        let conns = connections.get();
-        reg.set_connections(conns);
     });
 
     // Event handlers
@@ -447,7 +441,7 @@ where
     let menu_items_signal = menu_items.unwrap_or_else(|| Signal::derive(std::vec::Vec::new));
 
     // Groups overlay
-    let groups_signal = groups.unwrap_or_else(|| Signal::derive(std::vec::Vec::new));
+    let groups_signal = groups.unwrap_or_default();
     let groups_view = if let Some(cb) = on_group_event {
         view! {
             <GroupBoxOverlay<N, P, C, T>

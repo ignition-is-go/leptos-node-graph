@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use leptos::prelude::*;
@@ -66,17 +65,13 @@ struct DynNode {
 
 #[component]
 fn App() -> impl IntoView {
-    let connections: RwSignal<HashMap<String, ConnectionEntry<String, String>>> =
-        RwSignal::new(HashMap::new());
-    let connections_signal = Signal::derive(move || connections.get());
+    let connections: KeyedMap<String, ConnectionEntry<String, String>> = KeyedMap::new();
 
     // Generate initial graph
     let (initial_nodes, initial_connections, initial_groups) = generate_demo_graph(2, 1);
     let nodes: RwSignal<Vec<DynNode>> = RwSignal::new(initial_nodes);
     for (id, entry) in initial_connections {
-        connections.update(|map| {
-            map.insert(id, entry);
-        });
+        connections.insert(id, entry);
     }
 
     // Build node type registry
@@ -108,7 +103,10 @@ fn App() -> impl IntoView {
         }
     });
 
-    let groups: RwSignal<Vec<GroupBox<String>>> = RwSignal::new(initial_groups);
+    let groups: KeyedMap<String, GroupBox<String>> = KeyedMap::new();
+    for group in initial_groups {
+        groups.insert(group.id.clone(), group);
+    }
 
     // The app's reactive owner, captured so nodes created from a graph event get
     // signals that outlive whatever transient scope raised the event.
@@ -136,15 +134,11 @@ fn App() -> impl IntoView {
                     if already {
                         return;
                     }
-                    connections.update(|map| {
-                        let id = next_id("conn");
-                        map.insert(id.clone(), ConnectionEntry { id, source, target });
-                    });
+                    let id = next_id("conn");
+                    connections.insert(id.clone(), ConnectionEntry { id, source, target });
                 }
                 GraphEvent::ConnectionRemoved { id } => {
-                    connections.update(|map| {
-                        map.remove(&id);
-                    });
+                    connections.remove(&id);
                 }
                 GraphEvent::NodesDeleted { ids } => {
                     nodes.update(|ns| ns.retain(|n| !ids.contains(&n.id)));
@@ -178,24 +172,23 @@ fn App() -> impl IntoView {
                             Some(PortDirection::Input) => (new_port_id, draft_port),
                             None => (draft_port, new_port_id),
                         };
-                        connections.update(|map| {
-                            let id = next_id("conn");
-                            map.insert(id.clone(), ConnectionEntry { id, source, target });
-                        });
+                        let id = next_id("conn");
+                        connections.insert(id.clone(), ConnectionEntry { id, source, target });
                     }
                 }
                 GraphEvent::GroupCreated { node_ids } => {
                     if node_ids.len() > 1 {
                         let group_id = next_id("group");
-                        groups.update(|gs| {
-                            gs.push(GroupBox {
+                        groups.insert(
+                            group_id.clone(),
+                            GroupBox {
                                 id: group_id,
                                 node_ids,
                                 label: Some("New Group".into()),
                                 color: Some(random_group_color()),
                                 error: false,
-                            });
-                        });
+                            },
+                        );
                     }
                 }
                 other => {
@@ -240,35 +233,21 @@ fn App() -> impl IntoView {
         ..Default::default()
     });
 
-    let groups_signal = Signal::derive(move || groups.get());
-
     let on_group_event = Callback::new(move |event: GroupEvent<String>| match event {
         GroupEvent::Renamed {
             group_id,
             new_label,
         } => {
-            groups.update(|gs| {
-                if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
-                    g.label = Some(new_label);
-                }
-            });
+            groups.update(&group_id, |group| group.label = Some(new_label));
         }
         GroupEvent::MembersChanged { group_id, node_ids } => {
-            groups.update(|gs| {
-                if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
-                    g.node_ids = node_ids;
-                }
-            });
+            groups.update(&group_id, |group| group.node_ids = node_ids);
         }
         GroupEvent::ColorChanged {
             group_id,
             new_color,
         } => {
-            groups.update(|gs| {
-                if let Some(g) = gs.iter_mut().find(|g| g.id == group_id) {
-                    g.color = Some(new_color);
-                }
-            });
+            groups.update(&group_id, |group| group.color = Some(new_color));
         }
     });
 
@@ -314,12 +293,12 @@ fn App() -> impl IntoView {
             <NodeEditor
                 handle=handle
                 config={EditorConfig::default()}
-                connections=connections_signal
+                connections=connections
                 on_event=on_event
                 _marker={PhantomData::<DemoPort>}
                 menu_items=menu_items
                 menu_search=menu_search
-                groups=groups_signal
+                groups=groups
                 on_group_event=on_group_event
             >
                 <For

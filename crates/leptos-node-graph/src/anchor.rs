@@ -427,30 +427,28 @@ where
     let id_conn = id.clone();
     let reg_conn = registry.clone();
     let is_connected = Signal::derive(move || {
-        reg_conn.connections.with(|conns| {
-            conns
-                .values()
-                .any(|c| c.source == id_conn || c.target == id_conn)
-        })
+        !reg_conn
+            .port_connections
+            .get(&id_conn)
+            .unwrap_or_default()
+            .is_empty()
     });
 
     // Broken connections: one side registered, other side missing
     let id_broken = id.clone();
     let reg_broken = registry.clone();
     let has_broken_connections = Signal::derive(move || {
-        reg_broken.connections.with(|conns| {
-            reg_broken.ports.with_untracked(|ports| {
-                conns.values().any(|c| {
-                    let involves_me = c.source == id_broken || c.target == id_broken;
-                    if !involves_me {
-                        return false;
-                    }
-                    let source_ok = ports.contains_key(&c.source);
-                    let target_ok = ports.contains_key(&c.target);
-                    source_ok != target_ok // exactly one side missing
+        reg_broken
+            .port_connections
+            .get(&id_broken)
+            .unwrap_or_default()
+            .iter()
+            .any(|id| {
+                reg_broken.connections.get(id).is_some_and(|connection| {
+                    reg_broken.ports.get(&connection.source).is_some()
+                        != reg_broken.ports.get(&connection.target).is_some()
                 })
             })
-        })
     });
 
     // Context menu state
@@ -466,20 +464,12 @@ where
         if let Some(builder) = custom_menu.clone() {
             return builder.build(&id_menu, direction);
         }
-        let has_conns = reg_menu.connections.with(|conns| {
-            conns
-                .values()
-                .any(|c| c.source == id_menu || c.target == id_menu)
-        });
-        let has_broken = reg_menu.connections.with(|conns| {
-            reg_menu.ports.with_untracked(|ports| {
-                conns.values().any(|c| {
-                    let involves_me = c.source == id_menu || c.target == id_menu;
-                    if !involves_me {
-                        return false;
-                    }
-                    !ports.contains_key(&c.source) || !ports.contains_key(&c.target)
-                })
+        let ids = reg_menu.port_connections.get(&id_menu).unwrap_or_default();
+        let has_conns = !ids.is_empty();
+        let has_broken = ids.iter().any(|id| {
+            reg_menu.connections.get(id).is_some_and(|connection| {
+                reg_menu.ports.get(&connection.source).is_none()
+                    || reg_menu.ports.get(&connection.target).is_none()
             })
         });
         vec![
