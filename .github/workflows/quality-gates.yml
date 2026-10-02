@@ -65,7 +65,10 @@ jobs:
         run: cargo flux run check-wasm
       - name: Install browser test tools
         run: |
-          cargo binstall trunk --version 0.21.14 --no-confirm
+          curl --fail --location --retry 3 https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz -o "$RUNNER_TEMP/trunk.tar.gz"
+          echo "f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b  $RUNNER_TEMP/trunk.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/trunk.tar.gz" -C "$CARGO_HOME/bin" trunk
+          trunk --version
           python3 -m venv .browser-venv
           .browser-venv/bin/pip install -r tests/browser/requirements.txt
           .browser-venv/bin/python -m playwright install --with-deps chromium
