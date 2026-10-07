@@ -8,6 +8,24 @@ use crate::subway::{self, SubwayConnection, SubwayOptions, SubwayRect, SubwayRou
 use crate::types::*;
 use crate::utils;
 
+/// Visual endpoints for ports hidden inside collapsed compound rows.
+/// Connections retain their original port ids for selection, deletion and editing.
+#[derive(Clone)]
+pub struct PortDisplayAliases<P: PortId>(pub Signal<HashMap<P, P>>);
+
+fn display_ports<N: NodeId, P: PortId, T: PortType>(
+    mut ports: HashMap<P, PortEntry<N, P, T>>,
+    aliases: &HashMap<P, P>,
+) -> HashMap<P, PortEntry<N, P, T>> {
+    for (port, parent) in aliases {
+        if let Some(mut parent) = ports.get(parent).cloned() {
+            parent.id = port.clone();
+            ports.insert(port.clone(), parent);
+        }
+    }
+    ports
+}
+
 /// Corner rounding applied to routed polylines when drawing them.
 const SUBWAY_CORNER_RADIUS: f64 = 6.0;
 /// Frozen routes within this distance of a changed node are included in its incremental solve.
@@ -328,6 +346,17 @@ where
 {
     let registry = expect_context::<EditorRegistry<N, P, C, T>>();
     let style_config = use_context::<ConnectionStyle>().unwrap_or_default();
+    let aliases = use_context::<PortDisplayAliases<P>>();
+    let port_registry = registry.clone();
+    let rendered_ports = Signal::derive(move || {
+        display_ports(
+            port_registry.ports.get(),
+            &aliases
+                .as_ref()
+                .map(|aliases| aliases.0.get())
+                .unwrap_or_default(),
+        )
+    });
     // Reactive routing mode; absent context defaults to Orthogonal (subway).
     let routing_mode = use_context::<RwSignal<RoutingMode>>();
     let connection_signals = StoredValue::new(HashMap::<C, ConnectionSignals>::new());
@@ -341,7 +370,7 @@ where
         let reg = registry.clone();
         Effect::new(move |_| {
             let conns = reg.connections.get();
-            let ports = reg.ports.get();
+            let ports = rendered_ports.get();
             connection_signals.update_value(|signals| {
                 signals.retain(|id, _| conns.contains_key(id));
                 for (id, connection) in &conns {
@@ -372,7 +401,7 @@ where
         Effect::new(move |_| {
             let mode = routing_mode.map(|mode| mode.get()).unwrap_or_default();
             let conns = reg.connections.get();
-            let ports = reg.ports.get();
+            let ports = rendered_ports.get();
             let nodes = reg.nodes.get();
             let ports_at_node_origin = ports
                 .values()
@@ -468,7 +497,7 @@ where
         <For
             each=move || {
                 let conns = reg_for_each.connections.get();
-                let ports = reg_for_each.ports.get_untracked();
+                let ports = rendered_ports.get_untracked();
                 let mut ids: Vec<_> = conns.keys().cloned().collect();
                 ids.sort_by_cached_key(|id| format!("{id:?}"));
                 let mut items = Vec::with_capacity(ids.len());
@@ -740,6 +769,50 @@ fn log_subway_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[derive(Clone, Debug, PartialEq)]
+    struct TestPort;
+    impl PortType for TestPort {
+        fn compatible(_: &Self, _: &Self) -> bool {
+            true
+        }
+        fn type_id(&self) -> String {
+            "any".into()
+        }
+        fn from_type_id(_: &str) -> Self {
+            Self
+        }
+    }
+
+    #[test]
+    fn collapsed_alias_changes_display_geometry_without_changing_registry_or_connection() {
+        let parent = PortEntry {
+            id: "radius".to_owned(),
+            node_id: "node".to_owned(),
+            direction: PortDirection::Input,
+            port_type: TestPort,
+            position: Position::new(120.0, 40.0),
+            slot_index: 0,
+            offset: None,
+        };
+        let ports = HashMap::from([("radius".to_owned(), parent)]);
+        let connection = ConnectionEntry {
+            id: "wire".to_owned(),
+            source: "wave".to_owned(),
+            target: "radius.y".to_owned(),
+        };
+        let collapsed = display_ports(
+            ports.clone(),
+            &HashMap::from([("radius.y".to_owned(), "radius".to_owned())]),
+        );
+        assert_eq!(
+            collapsed.get(&connection.target).map(|port| port.position),
+            Some(Position::new(120.0, 40.0))
+        );
+        assert!(!ports.contains_key(&connection.target));
+        assert_eq!(connection.target, "radius.y");
+        let expanded = display_ports(ports, &HashMap::new());
+        assert!(!expanded.contains_key(&connection.target));
+    }
 
     fn batch() -> SubwayBatch<String, String> {
         SubwayBatch {

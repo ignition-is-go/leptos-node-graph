@@ -424,13 +424,22 @@ where
             .with(|d| d.as_ref().is_some_and(|d| d.source_port == id_source))
     });
 
+    let display_aliases = use_context::<crate::PortDisplayAliases<P>>();
+    let connected_aliases = display_aliases.clone();
     let id_conn = id.clone();
     let reg_conn = registry.clone();
     let is_connected = Signal::derive(move || {
+        let aliases = connected_aliases
+            .as_ref()
+            .map(|aliases| aliases.0.get())
+            .unwrap_or_default();
         reg_conn.connections.with(|conns| {
-            conns
-                .values()
-                .any(|c| c.source == id_conn || c.target == id_conn)
+            conns.values().any(|c| {
+                c.source == id_conn
+                    || c.target == id_conn
+                    || aliases.get(&c.source) == Some(&id_conn)
+                    || aliases.get(&c.target) == Some(&id_conn)
+            })
         })
     });
 
@@ -438,15 +447,19 @@ where
     let id_broken = id.clone();
     let reg_broken = registry.clone();
     let has_broken_connections = Signal::derive(move || {
+        let aliases = display_aliases
+            .as_ref()
+            .map(|aliases| aliases.0.get())
+            .unwrap_or_default();
         reg_broken.connections.with(|conns| {
-            reg_broken.ports.with_untracked(|ports| {
+            reg_broken.ports.with(|ports| {
                 conns.values().any(|c| {
                     let involves_me = c.source == id_broken || c.target == id_broken;
                     if !involves_me {
                         return false;
                     }
-                    let source_ok = ports.contains_key(&c.source);
-                    let target_ok = ports.contains_key(&c.target);
+                    let source_ok = ports.contains_key(aliases.get(&c.source).unwrap_or(&c.source));
+                    let target_ok = ports.contains_key(aliases.get(&c.target).unwrap_or(&c.target));
                     source_ok != target_ok // exactly one side missing
                 })
             })
