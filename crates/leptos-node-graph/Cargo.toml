@@ -1,6 +1,6 @@
 [package]
 name = "leptos-node-graph"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2024"
 description = "A reactive node graph editor component for Leptos"
 license = "MIT"
