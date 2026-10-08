@@ -3,6 +3,7 @@ pub mod connection;
 pub mod editor;
 pub mod group;
 pub mod history;
+pub mod hover_expand;
 pub mod interaction;
 pub mod layout;
 pub mod menu;
@@ -21,10 +22,11 @@ pub use anchor::{
     AnchorContext, AnchorMenuAction, AnchorMenuBuilder, AnchorMenuItem, AnchorMenuState,
     InputAnchor, OutputAnchor,
 };
-pub use connection::{ConnectionStyle, RoutingMode};
+pub use connection::{ConnectionStyle, PortDisplayAliases, RoutingMode};
 pub use editor::{EditorHandle, NodeEditor};
 pub use group::{GroupBounds, GroupBox, GroupBoxOverlay, GroupEvent};
 pub use history::UndoHistory;
+pub use hover_expand::use_draft_hover_expansion;
 pub use layout::{LayoutEngine, LayoutGraph};
 pub use menu::{
     Category, DraftContext, MenuPort, NodeMenu, NodeMenuContext, NodeMenuEvent, NodeMenuItem,
