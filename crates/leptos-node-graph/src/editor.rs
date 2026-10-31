@@ -154,6 +154,7 @@ where
         registry.viewport = h.viewport;
     }
     provide_context(registry.clone());
+    provide_context(crate::anchor::connected_ports(&registry));
 
     let container_ref = handle.map(|h| h.container).unwrap_or_default();
 

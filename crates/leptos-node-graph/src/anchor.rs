@@ -1,4 +1,7 @@
-use std::marker::PhantomData;
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+};
 
 use leptos::prelude::*;
 use leptos_use::use_event_listener;
@@ -425,42 +428,29 @@ where
     });
 
     let display_aliases = use_context::<crate::PortDisplayAliases<P>>();
-    let connected_aliases = display_aliases.clone();
+    let connected_ports =
+        use_context::<ConnectedPorts<P>>().unwrap_or_else(|| connected_ports(&registry));
     let id_conn = id.clone();
-    let reg_conn = registry.clone();
-    let is_connected = Signal::derive(move || {
-        let aliases = connected_aliases
-            .as_ref()
-            .map(|aliases| aliases.0.get())
-            .unwrap_or_default();
-        reg_conn.connections.with(|conns| {
-            conns.values().any(|c| {
-                c.source == id_conn
-                    || c.target == id_conn
-                    || aliases.get(&c.source) == Some(&id_conn)
-                    || aliases.get(&c.target) == Some(&id_conn)
-            })
-        })
-    });
+    let is_connected = Memo::new(move |_| connected_ports.0.with(|ports| ports.contains(&id_conn)));
 
-    // Broken connections: one side registered, other side missing
+    // Broken connections: one side registered, other side missing.
     let id_broken = id.clone();
     let reg_broken = registry.clone();
-    let has_broken_connections = Signal::derive(move || {
-        let aliases = display_aliases
-            .as_ref()
-            .map(|aliases| aliases.0.get())
-            .unwrap_or_default();
-        reg_broken.connections.with(|conns| {
-            reg_broken.ports.with(|ports| {
-                conns.values().any(|c| {
-                    let involves_me = c.source == id_broken || c.target == id_broken;
-                    if !involves_me {
-                        return false;
-                    }
-                    let source_ok = ports.contains_key(aliases.get(&c.source).unwrap_or(&c.source));
-                    let target_ok = ports.contains_key(aliases.get(&c.target).unwrap_or(&c.target));
-                    source_ok != target_ok // exactly one side missing
+    let has_broken_connections = Memo::new(move |_| {
+        with_display_aliases(display_aliases.as_ref(), |aliases| {
+            reg_broken.connections.with(|conns| {
+                reg_broken.ports.with(|ports| {
+                    conns.values().any(|c| {
+                        let involves_me = c.source == id_broken || c.target == id_broken;
+                        if !involves_me {
+                            return false;
+                        }
+                        let source_ok =
+                            ports.contains_key(aliases.get(&c.source).unwrap_or(&c.source));
+                        let target_ok =
+                            ports.contains_key(aliases.get(&c.target).unwrap_or(&c.target));
+                        source_ok != target_ok
+                    })
                 })
             })
         })
@@ -603,8 +593,8 @@ where
         is_compatible,
         is_incompatible,
         is_source,
-        is_connected,
-        has_broken_connections,
+        is_connected: is_connected.into(),
+        has_broken_connections: has_broken_connections.into(),
         dot_ref,
         port_type_label: port_type.type_id(),
     };
@@ -1000,4 +990,95 @@ where
         dot_shape,
         dot_multi,
     )
+}
+
+fn with_display_aliases<P: PortId, R>(
+    aliases: Option<&crate::PortDisplayAliases<P>>,
+    read: impl FnOnce(&HashMap<P, P>) -> R,
+) -> R {
+    match aliases {
+        Some(aliases) => aliases.0.with(read),
+        None => read(&HashMap::new()),
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ConnectedPorts<P: PortId>(Memo<HashSet<P>>);
+
+// Share the edge walk across anchors; each anchor deduplicates its own bool
+// before notifying its dot, label, or consumer-supplied styling.
+pub(crate) fn connected_ports<N: NodeId, P: PortId, C: ConnectionId, T: PortType>(
+    registry: &EditorRegistry<N, P, C, T>,
+) -> ConnectedPorts<P> {
+    let connections = registry.connections;
+    let aliases = use_context::<crate::PortDisplayAliases<P>>();
+    ConnectedPorts(Memo::new(move |_| {
+        with_display_aliases(aliases.as_ref(), |aliases| {
+            connections.with(|connections| connected_port_ids(connections.values(), aliases))
+        })
+    }))
+}
+
+fn connected_port_ids<'a, P: PortId, C: ConnectionId>(
+    connections: impl Iterator<Item = &'a crate::registry::ConnectionEntry<P, C>>,
+    aliases: &HashMap<P, P>,
+) -> HashSet<P> {
+    let mut connected = HashSet::new();
+    for connection in connections {
+        for port in [&connection.source, &connection.target] {
+            connected.insert(port.clone());
+            if let Some(parent) = aliases.get(port) {
+                connected.insert(parent.clone());
+            }
+        }
+    }
+    connected
+}
+
+#[cfg(test)]
+mod connectivity_tests {
+    use super::*;
+    use crate::registry::ConnectionEntry;
+
+    #[test]
+    fn connected_lookup_keeps_direct_ports_and_collapsed_parents() {
+        let connections = [ConnectionEntry {
+            id: 1_u64,
+            source: 10_u64,
+            target: 20,
+        }];
+        let aliases = HashMap::from([(10, 100), (20, 200), (30, 300)]);
+        assert_eq!(
+            connected_port_ids(connections.iter(), &aliases),
+            HashSet::from([10, 20, 100, 200])
+        );
+        assert_eq!(
+            connected_port_ids(connections.iter(), &HashMap::new()),
+            HashSet::from([10, 20])
+        );
+        assert!(
+            connected_port_ids(std::iter::empty::<&ConnectionEntry<u64, u64>>(), &aliases)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn alias_reads_borrow_the_signal_map() {
+        Owner::new().with(|| {
+            let map = RwSignal::new(HashMap::from([(1_u64, 2_u64)]));
+            let aliases = crate::PortDisplayAliases(map.into());
+            let original = map.with_untracked(|map| map.get(&1).unwrap() as *const u64);
+            assert!(with_display_aliases(Some(&aliases), |map| std::ptr::eq(
+                map.get(&1).unwrap(),
+                original
+            )));
+            map.update(|map| {
+                map.insert(1, 3);
+            });
+            assert_eq!(
+                with_display_aliases(Some(&aliases), |map| map.get(&1).copied()),
+                Some(3)
+            );
+        });
+    }
 }
