@@ -38,7 +38,8 @@ pub struct NodeElement(pub NodeRef<leptos::html::Div>);
 /// context so consumers can gate expensive per-anchor content — e.g. live value
 /// subscriptions — on it. Off-screen nodes stay MOUNTED (their ports remain
 /// registered, so connection wires are unaffected); only their costly content is
-/// skipped.
+/// skipped. Until the canvas is measured, the flag is false so consumers can
+/// render placeholders without constructing every node’s live content first.
 #[derive(Clone, Copy)]
 pub struct NodeVisible(pub Signal<bool>);
 
@@ -170,8 +171,7 @@ where
     // Viewport visibility: does this node's rect intersect the visible canvas
     // area (screen 0..container mapped to canvas space), padded by an overscan
     // margin so nodes near the edge stay live and don't pop while panning?
-    // Until the container is measured (size 0), default to visible so nothing is
-    // ever wrongly culled during load.
+    // Until the container is measured, keep expensive content inactive.
     // MUST be a Memo (value-deduped), NOT Signal::derive: the viewport changes
     // every pan frame, so a non-deduped derived signal would re-fire — and thus
     // rebuild every visible node's content + subscriptions — on EVERY frame. The
@@ -180,24 +180,15 @@ where
     // don't pop/rebuild during a normal pan.
     let reg_vis = registry.clone();
     let in_viewport = Memo::new(move |_| {
-        let cs = reg_vis.container_size.get();
-        if cs.width <= 0.0 || cs.height <= 0.0 {
-            return true;
-        }
-        // Read the DEBOUNCED viewport, not the live one, so visibility (and the
-        // subscription create/dispose it drives) only re-evaluates after a pan
-        // settles — never mid-pan.
-        let vp = reg_vis.visibility_viewport.get();
-        let zoom = if vp.zoom.abs() < 1e-6 { 1.0 } else { vp.zoom };
-        let tl = vp.screen_to_canvas(Position::new(0.0, 0.0));
-        let br = vp.screen_to_canvas(Position::new(cs.width, cs.height));
-        let margin = 600.0 / zoom;
-        let (vx0, vy0) = (tl.x - margin, tl.y - margin);
-        let (vx1, vy1) = (br.x + margin, br.y + margin);
-        let p = position.get();
-        let nw = node_w.get().max(1.0);
-        let nh = node_h.get().max(1.0);
-        p.x <= vx1 && p.x + nw >= vx0 && p.y <= vy1 && p.y + nh >= vy0
+        // Use the settled viewport so live content is not rebuilt mid-pan.
+        node_in_viewport(
+            reg_vis.container_size.get(),
+            reg_vis.visibility_viewport.get(),
+            Rect {
+                position: position.get(),
+                size: Size::new(node_w.get().max(1.0), node_h.get().max(1.0)),
+            },
+        )
     });
 
     // Derived state signals
@@ -604,5 +595,56 @@ pub fn NodeField(#[prop(into)] label: String, children: Children) -> impl IntoVi
             <label style=label_style>{label}</label>
             {children()}
         </div>
+    }
+}
+
+fn node_in_viewport(container: Size, viewport: ViewportTransform, node: Rect) -> bool {
+    if container.width <= 0.0 || container.height <= 0.0 {
+        return false;
+    }
+    let zoom = if viewport.zoom.abs() < 1e-6 {
+        1.0
+    } else {
+        viewport.zoom
+    };
+    let tl = viewport.screen_to_canvas(Position::new(0.0, 0.0));
+    let br = viewport.screen_to_canvas(Position::new(container.width, container.height));
+    let margin = 600.0 / zoom;
+    node.position.x <= br.x + margin
+        && node.position.x + node.size.width >= tl.x - margin
+        && node.position.y <= br.y + margin
+        && node.position.y + node.size.height >= tl.y - margin
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+
+    #[test]
+    fn content_waits_for_measurement_and_respects_canvas_bounds() {
+        let node = Rect {
+            position: Position::new(100.0, 100.0),
+            size: Size::new(200.0, 100.0),
+        };
+        let viewport = ViewportTransform::default();
+        assert!(!node_in_viewport(Size::default(), viewport, node));
+        assert!(!node_in_viewport(Size::new(800.0, 0.0), viewport, node));
+        assert!(node_in_viewport(Size::new(800.0, 600.0), viewport, node));
+        let remote = Rect {
+            position: Position::new(2000.0, 2000.0),
+            ..node
+        };
+        assert!(!node_in_viewport(Size::new(800.0, 600.0), viewport, remote));
+        let moved = ViewportTransform {
+            pan_x: -2000.0,
+            pan_y: -2000.0,
+            zoom: 1.0,
+        };
+        assert!(node_in_viewport(Size::new(800.0, 600.0), moved, remote));
+        let near = Rect {
+            position: Position::new(900.0, 600.0),
+            ..node
+        };
+        assert!(node_in_viewport(Size::new(800.0, 600.0), viewport, near));
     }
 }
