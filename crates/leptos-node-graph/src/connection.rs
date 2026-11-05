@@ -373,9 +373,13 @@ where
     // changed receive a reactive notification.
     {
         let reg = registry.clone();
-        Effect::new(move |_| {
-            let conns = reg.connections.get();
-            let ports = rendered_ports.get();
+        let active = Arc::new(AtomicBool::new(true));
+        let pending = Arc::new(AtomicBool::new(false));
+        let active_cleanup = active.clone();
+        on_cleanup(move || active_cleanup.store(false, Ordering::Relaxed));
+        let update_endpoints = Arc::new(move || {
+            let conns = reg.connections.get_untracked();
+            let ports = rendered_ports.get_untracked();
             connection_signals.update_value(|signals| {
                 signals.retain(|id, _| conns.contains_key(id));
                 for (id, connection) in &conns {
@@ -394,6 +398,27 @@ where
                     if signals.endpoints.get_untracked() != endpoints {
                         signals.endpoints.set(endpoints);
                     }
+                }
+            });
+        });
+        let reg = registry.clone();
+        let aliases = routing_aliases.clone();
+        Effect::new(move |_| {
+            reg.connections.track();
+            reg.ports.track();
+            if let Some(aliases) = aliases.as_ref() {
+                aliases.0.track();
+            }
+            if pending.swap(true, Ordering::Relaxed) {
+                return;
+            }
+            let update_endpoints = update_endpoints.clone();
+            let pending = pending.clone();
+            let active = active.clone();
+            crate::raf::request_animation_frame(move || {
+                pending.store(false, Ordering::Relaxed);
+                if active.load(Ordering::Relaxed) {
+                    update_endpoints();
                 }
             });
         });

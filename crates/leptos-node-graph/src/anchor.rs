@@ -239,10 +239,9 @@ where
             (dot_rect.y() + dot_rect.height() / 2.0 - node_rect.y()) / zoom,
         );
         let canvas_pos = Position::new(node_pos.x + offset.x, node_pos.y + offset.y);
-        reg_pos.set_port_position(&id_pos, canvas_pos);
-
-        // Store offset for batch_set_positions during drag
-        reg_pos.set_port_offset(&id_pos, offset);
+        // Publish all measured anchors together rather than waking the entire
+        // port registry between individual DOM reads.
+        reg_pos.queue_port_measurement(id_pos.clone(), canvas_pos, offset);
     });
 
     // Mousedown: start a draft from any port, or click-complete an existing draft
@@ -364,11 +363,11 @@ where
     let id_compat = id.clone();
     let reg_compat = registry.clone();
     let is_compatible: Signal<bool> = Memo::new(move |_| {
-        reg_compat.ports.track();
         reg_compat.draft_origin.with(|d| {
             let Some((source_port, origin_direction)) = d.as_ref() else {
                 return false;
             };
+            reg_compat.ports.track();
             if direction == *origin_direction {
                 return false;
             }
@@ -397,11 +396,11 @@ where
     let id_incompat = id.clone();
     let reg_incompat = registry.clone();
     let is_incompatible: Signal<bool> = Memo::new(move |_| {
-        reg_incompat.ports.track();
         reg_incompat.draft_origin.with(|d| {
             let Some((source_port, origin_direction)) = d.as_ref() else {
                 return false;
             };
+            reg_incompat.ports.track();
             if *source_port == id_incompat {
                 return false;
             } // source is not incompatible

@@ -98,6 +98,8 @@ where
     /// Live positions written by the drag RAF, independent of persisted state.
     pub live_positions: RwSignal<HashMap<N, Position>>,
     pub ports: RwSignal<HashMap<P, PortEntry<N, P, T>>>,
+    pending_port_measurements: StoredValue<HashMap<P, (Position, Position)>>,
+    port_measurement_pending: StoredValue<bool>,
     pub connections: RwSignal<HashMap<C, ConnectionEntry<P, C>>>,
     pub selected_nodes: RwSignal<HashSet<N>>,
     pub selected_connections: RwSignal<HashSet<C>>,
@@ -165,6 +167,8 @@ where
             nodes: RwSignal::new(HashMap::new()),
             live_positions: RwSignal::new(HashMap::new()),
             ports: RwSignal::new(HashMap::new()),
+            pending_port_measurements: StoredValue::new(HashMap::new()),
+            port_measurement_pending: StoredValue::new(false),
             connections: RwSignal::new(HashMap::new()),
             selected_nodes: RwSignal::new(HashSet::new()),
             selected_connections: RwSignal::new(HashSet::new()),
@@ -285,6 +289,9 @@ where
     /// consumer's data but not rendered (the connection renderer skips connections
     /// with missing ports). This allows connections to restore if the port reappears.
     pub fn deregister_port(&self, id: &P) {
+        self.pending_port_measurements.update_value(|updates| {
+            updates.remove(id);
+        });
         // Get the node_id and direction before removing
         let port_info = self
             .ports
@@ -447,6 +454,46 @@ where
             }
             entry.position = position;
             true
+        });
+    }
+
+    /// Publish measured anchor geometry together, after all layout reads in this turn.
+    pub(crate) fn queue_port_measurement(&self, id: P, position: Position, offset: Position) {
+        self.pending_port_measurements.update_value(|updates| {
+            updates.insert(id, (position, offset));
+        });
+        if self.port_measurement_pending.get_value() {
+            return;
+        }
+        self.port_measurement_pending.set_value(true);
+        let registry = self.clone();
+        crate::raf::request_animation_frame(move || registry.flush_port_measurements());
+    }
+
+    fn flush_port_measurements(&self) {
+        let Some(updates) = self
+            .pending_port_measurements
+            .try_update_value(std::mem::take)
+        else {
+            return; // editor was disposed before the queued frame
+        };
+        self.port_measurement_pending
+            .try_update_value(|pending| *pending = false);
+        self.nodes.with_untracked(|nodes| {
+            self.ports.try_maybe_update(|ports| {
+                let mut changed = false;
+                for (id, (position, offset)) in updates {
+                    if let Some(port) = ports.get_mut(&id) {
+                        let position = nodes.get(&port.node_id).map_or(position, |node| {
+                            Position::new(node.position.x + offset.x, node.position.y + offset.y)
+                        });
+                        changed |= port.position != position;
+                        port.position = position;
+                        port.offset = Some(offset);
+                    }
+                }
+                (changed, ())
+            });
         });
     }
 
@@ -717,6 +764,58 @@ mod tests {
         fn from_type_id(_: &str) -> Self {
             Self::Any
         }
+    }
+
+    #[test]
+    fn measured_ports_publish_once_and_use_the_latest_node_position() {
+        Owner::new().with(|| {
+            let registry = EditorRegistry::<String, String, String, TestPortType>::new(
+                EditorConfig::default(),
+                Callback::new(|_: GraphEvent<String, String, String>| {}),
+            );
+            registry.register_node("node".into(), Position::default(), None);
+            for i in 0..835 {
+                registry.register_port(
+                    i.to_string(),
+                    "node".into(),
+                    PortDirection::Input,
+                    TestPortType::Any,
+                    Position::default(),
+                );
+            }
+            let reads = Arc::new(AtomicUsize::new(0));
+            let count = reads.clone();
+            let ports = registry.ports;
+            let positions = Memo::new(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+                ports.with(|ports| ports.values().map(|port| port.position.x).sum::<f64>())
+            });
+            assert_eq!(positions.get(), 0.0);
+            for i in 0..835 {
+                registry.pending_port_measurements.update_value(|updates| {
+                    updates.insert(
+                        i.to_string(),
+                        (Position::new(5.0, 0.0), Position::new(5.0, 0.0)),
+                    );
+                });
+                assert_eq!(positions.get(), 0.0);
+            }
+            assert_eq!(reads.load(Ordering::Relaxed), 1);
+            // A move between measurement and publication must not restore stale positions.
+            registry.set_node_position(&"node".into(), Position::new(10.0, 0.0));
+            let before = reads.load(Ordering::Relaxed);
+            registry.flush_port_measurements();
+            assert_eq!(positions.get(), 835.0 * 15.0);
+            assert_eq!(reads.load(Ordering::Relaxed), before + 1);
+            registry.flush_port_measurements();
+            assert_eq!(positions.get(), 835.0 * 15.0);
+            assert_eq!(reads.load(Ordering::Relaxed), before + 1);
+            assert!(registry.ports.with_untracked(|ports| {
+                ports
+                    .values()
+                    .all(|p| p.offset == Some(Position::new(5.0, 0.0)))
+            }));
+        });
     }
 
     #[test]
