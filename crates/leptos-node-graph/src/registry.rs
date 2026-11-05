@@ -98,10 +98,14 @@ where
     /// Live positions written by the drag RAF, independent of persisted state.
     pub live_positions: RwSignal<HashMap<N, Position>>,
     pub ports: RwSignal<HashMap<P, PortEntry<N, P, T>>>,
+    pending_port_measurements: StoredValue<HashMap<P, (Position, Position)>>,
+    port_measurement_pending: StoredValue<bool>,
     pub connections: RwSignal<HashMap<C, ConnectionEntry<P, C>>>,
     pub selected_nodes: RwSignal<HashSet<N>>,
     pub selected_connections: RwSignal<HashSet<C>>,
     pub draft_connection: RwSignal<Option<DraftConnection<P, T>>>,
+    /// Stable gesture identity; pointer movement does not invalidate anchor styling.
+    pub draft_origin: Memo<Option<(P, PortDirection)>>,
     pub viewport: RwSignal<ViewportTransform>,
     /// A DEBOUNCED mirror of `viewport`, updated only after pan/zoom settles.
     /// `NodeVisible` reads this (not the live `viewport`) so visibility — and thus
@@ -151,14 +155,25 @@ where
 {
     /// Create a new registry with the given configuration and event callback.
     pub fn new(config: EditorConfig, on_event: Callback<GraphEvent<N, P, C>>) -> Self {
+        let draft_connection: RwSignal<Option<DraftConnection<P, T>>> = RwSignal::new(None);
+        let draft_origin = Memo::new(move |_| {
+            draft_connection.with(|draft| {
+                draft
+                    .as_ref()
+                    .map(|draft| (draft.source_port.clone(), draft.origin_direction))
+            })
+        });
         Self {
             nodes: RwSignal::new(HashMap::new()),
             live_positions: RwSignal::new(HashMap::new()),
             ports: RwSignal::new(HashMap::new()),
+            pending_port_measurements: StoredValue::new(HashMap::new()),
+            port_measurement_pending: StoredValue::new(false),
             connections: RwSignal::new(HashMap::new()),
             selected_nodes: RwSignal::new(HashSet::new()),
             selected_connections: RwSignal::new(HashSet::new()),
-            draft_connection: RwSignal::new(None),
+            draft_connection,
+            draft_origin,
             viewport: RwSignal::new(ViewportTransform::default()),
             visibility_viewport: RwSignal::new(ViewportTransform::default()),
             container_size: RwSignal::new(Size::default()),
@@ -274,6 +289,9 @@ where
     /// consumer's data but not rendered (the connection renderer skips connections
     /// with missing ports). This allows connections to restore if the port reappears.
     pub fn deregister_port(&self, id: &P) {
+        self.pending_port_measurements.update_value(|updates| {
+            updates.remove(id);
+        });
         // Get the node_id and direction before removing
         let port_info = self
             .ports
@@ -439,6 +457,46 @@ where
         });
     }
 
+    /// Publish measured anchor geometry together, after all layout reads in this turn.
+    pub(crate) fn queue_port_measurement(&self, id: P, position: Position, offset: Position) {
+        self.pending_port_measurements.update_value(|updates| {
+            updates.insert(id, (position, offset));
+        });
+        if self.port_measurement_pending.get_value() {
+            return;
+        }
+        self.port_measurement_pending.set_value(true);
+        let registry = self.clone();
+        crate::raf::request_animation_frame(move || registry.flush_port_measurements());
+    }
+
+    fn flush_port_measurements(&self) {
+        let Some(updates) = self
+            .pending_port_measurements
+            .try_update_value(std::mem::take)
+        else {
+            return; // editor was disposed before the queued frame
+        };
+        self.port_measurement_pending
+            .try_update_value(|pending| *pending = false);
+        self.nodes.with_untracked(|nodes| {
+            self.ports.try_maybe_update(|ports| {
+                let mut changed = false;
+                for (id, (position, offset)) in updates {
+                    if let Some(port) = ports.get_mut(&id) {
+                        let position = nodes.get(&port.node_id).map_or(position, |node| {
+                            Position::new(node.position.x + offset.x, node.position.y + offset.y)
+                        });
+                        changed |= port.position != position;
+                        port.position = position;
+                        port.offset = Some(offset);
+                    }
+                }
+                (changed, ())
+            });
+        });
+    }
+
     /// Set a port's cached offset from its node position.
     pub fn set_port_offset(&self, id: &P, offset: Position) {
         let mut guard = self.ports.write_untracked();
@@ -578,6 +636,11 @@ where
                 if entry.direction == draft.origin_direction || entry.node_id == source.node_id {
                     continue;
                 }
+                // Reject distant ports before potentially expensive schema compatibility.
+                let dist = crate::utils::distance(cursor, entry.position);
+                if dist > max_dist || best.as_ref().is_some_and(|(_, _, b)| dist >= *b) {
+                    continue;
+                }
                 let (output_type, input_type) = if draft.origin_direction == PortDirection::Output {
                     (&source.port_type, &entry.port_type)
                 } else {
@@ -586,10 +649,7 @@ where
                 if !T::compatible(output_type, input_type) {
                     continue;
                 }
-                let dist = crate::utils::distance(cursor, entry.position);
-                if dist <= max_dist && best.as_ref().is_none_or(|(_, _, b)| dist < *b) {
-                    best = Some((entry.id.clone(), entry.position, dist));
-                }
+                best = Some((entry.id.clone(), entry.position, dist));
             }
         });
         best.map(|(id, pos, _)| (id, pos))
@@ -684,6 +744,8 @@ mod tests {
 
     use super::*;
 
+    thread_local! { static COMPATIBILITY_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
     #[derive(Clone, Debug, PartialEq)]
     enum TestPortType {
         Any,
@@ -691,6 +753,7 @@ mod tests {
 
     impl PortType for TestPortType {
         fn compatible(_: &Self, _: &Self) -> bool {
+            COMPATIBILITY_CHECKS.with(|count| count.set(count.get() + 1));
             true
         }
 
@@ -701,6 +764,151 @@ mod tests {
         fn from_type_id(_: &str) -> Self {
             Self::Any
         }
+    }
+
+    #[test]
+    fn measured_ports_publish_once_and_use_the_latest_node_position() {
+        Owner::new().with(|| {
+            let registry = EditorRegistry::<String, String, String, TestPortType>::new(
+                EditorConfig::default(),
+                Callback::new(|_: GraphEvent<String, String, String>| {}),
+            );
+            registry.register_node("node".into(), Position::default(), None);
+            for i in 0..835 {
+                registry.register_port(
+                    i.to_string(),
+                    "node".into(),
+                    PortDirection::Input,
+                    TestPortType::Any,
+                    Position::default(),
+                );
+            }
+            let reads = Arc::new(AtomicUsize::new(0));
+            let count = reads.clone();
+            let ports = registry.ports;
+            let positions = Memo::new(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+                ports.with(|ports| ports.values().map(|port| port.position.x).sum::<f64>())
+            });
+            assert_eq!(positions.get(), 0.0);
+            for i in 0..835 {
+                registry.pending_port_measurements.update_value(|updates| {
+                    updates.insert(
+                        i.to_string(),
+                        (Position::new(5.0, 0.0), Position::new(5.0, 0.0)),
+                    );
+                });
+                assert_eq!(positions.get(), 0.0);
+            }
+            assert_eq!(reads.load(Ordering::Relaxed), 1);
+            // A move between measurement and publication must not restore stale positions.
+            registry.set_node_position(&"node".into(), Position::new(10.0, 0.0));
+            let before = reads.load(Ordering::Relaxed);
+            registry.flush_port_measurements();
+            assert_eq!(positions.get(), 835.0 * 15.0);
+            assert_eq!(reads.load(Ordering::Relaxed), before + 1);
+            registry.flush_port_measurements();
+            assert_eq!(positions.get(), 835.0 * 15.0);
+            assert_eq!(reads.load(Ordering::Relaxed), before + 1);
+            assert!(registry.ports.with_untracked(|ports| {
+                ports
+                    .values()
+                    .all(|p| p.offset == Some(Position::new(5.0, 0.0)))
+            }));
+        });
+    }
+
+    #[test]
+    fn snapping_only_checks_types_within_the_pointer_radius() {
+        Owner::new().with(|| {
+            let registry = EditorRegistry::<String, String, String, TestPortType>::new(
+                EditorConfig::default(),
+                Callback::new(|_: GraphEvent<String, String, String>| {}),
+            );
+            registry.register_port(
+                "source".into(),
+                "origin".into(),
+                PortDirection::Output,
+                TestPortType::Any,
+                Position::default(),
+            );
+            for x in 0..1000 {
+                registry.register_port(
+                    format!("far-{x}"),
+                    "other".into(),
+                    PortDirection::Input,
+                    TestPortType::Any,
+                    Position::new(1000.0 + x as f64, 0.0),
+                );
+            }
+            registry.register_port(
+                "near".into(),
+                "other".into(),
+                PortDirection::Input,
+                TestPortType::Any,
+                Position::new(2.0, 0.0),
+            );
+            registry.draft_connection.set(Some(DraftConnection {
+                source_port: "source".into(),
+                source_position: Position::default(),
+                port_type: TestPortType::Any,
+                current_end: Position::default(),
+                origin_direction: PortDirection::Output,
+                snap_target: None,
+            }));
+            COMPATIBILITY_CHECKS.with(|count| count.set(0));
+            assert_eq!(
+                registry.snap_target_for_draft(Position::default(), 10.0),
+                Some(("near".into(), Position::new(2.0, 0.0)))
+            );
+            COMPATIBILITY_CHECKS.with(|count| assert_eq!(count.get(), 1));
+            COMPATIBILITY_CHECKS.with(|count| count.set(0));
+            assert_eq!(
+                registry.snap_target_for_draft(Position::new(-100.0, 0.0), 10.0),
+                None
+            );
+            COMPATIBILITY_CHECKS.with(|count| assert_eq!(count.get(), 0));
+        });
+    }
+
+    #[test]
+    fn pointer_moves_do_not_recompute_draft_consumers() {
+        Owner::new().with(|| {
+            let registry = EditorRegistry::<String, String, String, TestPortType>::new(
+                EditorConfig::default(),
+                Callback::new(|_: GraphEvent<String, String, String>| {}),
+            );
+            let reads = Arc::new(AtomicUsize::new(0));
+            let count = reads.clone();
+            let origin = registry.draft_origin;
+            let anchor = Memo::new(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+                origin.get()
+            });
+            assert_eq!(anchor.get(), None);
+            registry.draft_connection.set(Some(DraftConnection {
+                source_port: "source".into(),
+                source_position: Position::default(),
+                port_type: TestPortType::Any,
+                current_end: Position::default(),
+                origin_direction: PortDirection::Output,
+                snap_target: None,
+            }));
+            assert!(anchor.get().is_some());
+            let baseline = reads.load(Ordering::Relaxed);
+            for x in 0..100 {
+                registry.draft_connection.update(|draft| {
+                    let draft = draft.as_mut().unwrap();
+                    draft.current_end = Position::new(x as f64, 0.0);
+                    draft.snap_target = Some(format!("target-{x}"));
+                });
+                assert!(anchor.get().is_some());
+            }
+            assert_eq!(reads.load(Ordering::Relaxed), baseline);
+            registry.draft_connection.set(None);
+            assert_eq!(anchor.get(), None);
+            assert_eq!(reads.load(Ordering::Relaxed), baseline + 1);
+        });
     }
 
     #[test]

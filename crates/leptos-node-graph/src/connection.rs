@@ -1,5 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use leptos::prelude::*;
 
@@ -348,6 +352,7 @@ where
     let style_config = use_context::<ConnectionStyle>().unwrap_or_default();
     let aliases = use_context::<PortDisplayAliases<P>>();
     let port_registry = registry.clone();
+    let routing_aliases = aliases.clone();
     let rendered_ports = Signal::derive(move || {
         display_ports(
             port_registry.ports.get(),
@@ -368,9 +373,13 @@ where
     // changed receive a reactive notification.
     {
         let reg = registry.clone();
-        Effect::new(move |_| {
-            let conns = reg.connections.get();
-            let ports = rendered_ports.get();
+        let active = Arc::new(AtomicBool::new(true));
+        let pending = Arc::new(AtomicBool::new(false));
+        let active_cleanup = active.clone();
+        on_cleanup(move || active_cleanup.store(false, Ordering::Relaxed));
+        let update_endpoints = Arc::new(move || {
+            let conns = reg.connections.get_untracked();
+            let ports = rendered_ports.get_untracked();
             connection_signals.update_value(|signals| {
                 signals.retain(|id, _| conns.contains_key(id));
                 for (id, connection) in &conns {
@@ -392,17 +401,44 @@ where
                 }
             });
         });
+        let reg = registry.clone();
+        let aliases = routing_aliases.clone();
+        Effect::new(move |_| {
+            reg.connections.track();
+            reg.ports.track();
+            if let Some(aliases) = aliases.as_ref() {
+                aliases.0.track();
+            }
+            if pending.swap(true, Ordering::Relaxed) {
+                return;
+            }
+            let update_endpoints = update_endpoints.clone();
+            let pending = pending.clone();
+            let active = active.clone();
+            crate::raf::request_animation_frame(move || {
+                pending.store(false, Ordering::Relaxed);
+                if active.load(Ordering::Relaxed) {
+                    update_endpoints();
+                }
+            });
+        });
     }
 
     // Solve routes separately from rendering. The cache filters identical
     // geometry, and node-only changes merge a small partial solve into frozen routes.
     {
         let reg = registry.clone();
-        Effect::new(move |_| {
-            let mode = routing_mode.map(|mode| mode.get()).unwrap_or_default();
-            let conns = reg.connections.get();
-            let ports = rendered_ports.get();
-            let nodes = reg.nodes.get();
+        let active = Arc::new(AtomicBool::new(true));
+        let pending = Arc::new(AtomicBool::new(false));
+        let active_cleanup = active.clone();
+        on_cleanup(move || active_cleanup.store(false, Ordering::Relaxed));
+        let solve = Arc::new(move || {
+            let mode = routing_mode
+                .map(|mode| mode.get_untracked())
+                .unwrap_or_default();
+            let conns = reg.connections.get_untracked();
+            let ports = rendered_ports.get_untracked();
+            let nodes = reg.nodes.get_untracked();
             let ports_at_node_origin = ports
                 .values()
                 .filter(|port| {
@@ -487,6 +523,35 @@ where
                 ports_at_node_origin,
                 ports.len(),
             );
+        });
+        let reg = registry.clone();
+        Effect::new(move |_| {
+            // Track invalidations without cloning maps or solving during layout.
+            reg.connections.track();
+            reg.ports.track();
+            reg.nodes.track();
+            if let Some(aliases) = routing_aliases.as_ref() {
+                aliases.0.track();
+            }
+            if let Some(mode) = routing_mode {
+                mode.track();
+            }
+            if pending.swap(true, Ordering::Relaxed) {
+                return;
+            }
+            let solve = solve.clone();
+            let pending = pending.clone();
+            let active = active.clone();
+            // RAF callbacks run before paint. The second frame gives newly
+            // mounted nodes a paint before routing, and batches their measurements.
+            crate::raf::request_animation_frame(move || {
+                crate::raf::request_animation_frame(move || {
+                    pending.store(false, Ordering::Relaxed);
+                    if active.load(Ordering::Relaxed) {
+                        solve();
+                    }
+                });
+            });
         });
     }
 
