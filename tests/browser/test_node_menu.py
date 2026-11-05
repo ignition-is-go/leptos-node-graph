@@ -48,6 +48,32 @@ class NodeMenuTests(unittest.TestCase):
     def created(self):
         return [event for event in self.events if event.startswith("Graph event: CreateNode")]
 
+    def test_routing_yields_a_frame_before_first_solve(self):
+        # Observe the real router before WASM starts, rather than mocking RAF.
+        self.page.add_init_script("""{
+            window.routingFrames = 0;
+            window.routingPasses = [];
+            const tick = () => {
+                if (document.querySelector('[data-node]')) window.routingFrames++;
+                requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+            const log = console.log.bind(console);
+            console.log = (...args) => {
+                if (args.some(arg => String(arg).includes('[subway]'))) {
+                    window.routingPasses.push(window.routingFrames);
+                }
+                log(...args);
+            };
+        }""")
+        self.page.reload()
+        self.page.wait_for_function("window.routingPasses.length > 0")
+        self.frame()
+        frames = self.page.evaluate("window.routingPasses")
+        self.assertTrue(all(frame > 0 for frame in frames), frames)
+        # A burst of port/node measurements must coalesce into one solve per frame.
+        self.assertEqual(len(frames), len(set(frames)), frames)
+
     def test_cross_pane_mouse_selection_and_theme(self):
         self.open()
         self.assertEqual(self.menu.locator(":scope > div").evaluate("el => getComputedStyle(el).backgroundColor"), "rgb(31, 42, 53)")
