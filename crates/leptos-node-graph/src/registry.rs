@@ -102,6 +102,8 @@ where
     pub selected_nodes: RwSignal<HashSet<N>>,
     pub selected_connections: RwSignal<HashSet<C>>,
     pub draft_connection: RwSignal<Option<DraftConnection<P, T>>>,
+    /// Stable gesture identity; pointer movement does not invalidate anchor styling.
+    pub draft_origin: Memo<Option<(P, PortDirection)>>,
     pub viewport: RwSignal<ViewportTransform>,
     /// A DEBOUNCED mirror of `viewport`, updated only after pan/zoom settles.
     /// `NodeVisible` reads this (not the live `viewport`) so visibility — and thus
@@ -151,6 +153,14 @@ where
 {
     /// Create a new registry with the given configuration and event callback.
     pub fn new(config: EditorConfig, on_event: Callback<GraphEvent<N, P, C>>) -> Self {
+        let draft_connection: RwSignal<Option<DraftConnection<P, T>>> = RwSignal::new(None);
+        let draft_origin = Memo::new(move |_| {
+            draft_connection.with(|draft| {
+                draft
+                    .as_ref()
+                    .map(|draft| (draft.source_port.clone(), draft.origin_direction))
+            })
+        });
         Self {
             nodes: RwSignal::new(HashMap::new()),
             live_positions: RwSignal::new(HashMap::new()),
@@ -158,7 +168,8 @@ where
             connections: RwSignal::new(HashMap::new()),
             selected_nodes: RwSignal::new(HashSet::new()),
             selected_connections: RwSignal::new(HashSet::new()),
-            draft_connection: RwSignal::new(None),
+            draft_connection,
+            draft_origin,
             viewport: RwSignal::new(ViewportTransform::default()),
             visibility_viewport: RwSignal::new(ViewportTransform::default()),
             container_size: RwSignal::new(Size::default()),
@@ -578,6 +589,11 @@ where
                 if entry.direction == draft.origin_direction || entry.node_id == source.node_id {
                     continue;
                 }
+                // Reject distant ports before potentially expensive schema compatibility.
+                let dist = crate::utils::distance(cursor, entry.position);
+                if dist > max_dist || best.as_ref().is_some_and(|(_, _, b)| dist >= *b) {
+                    continue;
+                }
                 let (output_type, input_type) = if draft.origin_direction == PortDirection::Output {
                     (&source.port_type, &entry.port_type)
                 } else {
@@ -586,10 +602,7 @@ where
                 if !T::compatible(output_type, input_type) {
                     continue;
                 }
-                let dist = crate::utils::distance(cursor, entry.position);
-                if dist <= max_dist && best.as_ref().is_none_or(|(_, _, b)| dist < *b) {
-                    best = Some((entry.id.clone(), entry.position, dist));
-                }
+                best = Some((entry.id.clone(), entry.position, dist));
             }
         });
         best.map(|(id, pos, _)| (id, pos))
@@ -684,6 +697,8 @@ mod tests {
 
     use super::*;
 
+    thread_local! { static COMPATIBILITY_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
     #[derive(Clone, Debug, PartialEq)]
     enum TestPortType {
         Any,
@@ -691,6 +706,7 @@ mod tests {
 
     impl PortType for TestPortType {
         fn compatible(_: &Self, _: &Self) -> bool {
+            COMPATIBILITY_CHECKS.with(|count| count.set(count.get() + 1));
             true
         }
 
@@ -701,6 +717,99 @@ mod tests {
         fn from_type_id(_: &str) -> Self {
             Self::Any
         }
+    }
+
+    #[test]
+    fn snapping_only_checks_types_within_the_pointer_radius() {
+        Owner::new().with(|| {
+            let registry = EditorRegistry::<String, String, String, TestPortType>::new(
+                EditorConfig::default(),
+                Callback::new(|_: GraphEvent<String, String, String>| {}),
+            );
+            registry.register_port(
+                "source".into(),
+                "origin".into(),
+                PortDirection::Output,
+                TestPortType::Any,
+                Position::default(),
+            );
+            for x in 0..1000 {
+                registry.register_port(
+                    format!("far-{x}"),
+                    "other".into(),
+                    PortDirection::Input,
+                    TestPortType::Any,
+                    Position::new(1000.0 + x as f64, 0.0),
+                );
+            }
+            registry.register_port(
+                "near".into(),
+                "other".into(),
+                PortDirection::Input,
+                TestPortType::Any,
+                Position::new(2.0, 0.0),
+            );
+            registry.draft_connection.set(Some(DraftConnection {
+                source_port: "source".into(),
+                source_position: Position::default(),
+                port_type: TestPortType::Any,
+                current_end: Position::default(),
+                origin_direction: PortDirection::Output,
+                snap_target: None,
+            }));
+            COMPATIBILITY_CHECKS.with(|count| count.set(0));
+            assert_eq!(
+                registry.snap_target_for_draft(Position::default(), 10.0),
+                Some(("near".into(), Position::new(2.0, 0.0)))
+            );
+            COMPATIBILITY_CHECKS.with(|count| assert_eq!(count.get(), 1));
+            COMPATIBILITY_CHECKS.with(|count| count.set(0));
+            assert_eq!(
+                registry.snap_target_for_draft(Position::new(-100.0, 0.0), 10.0),
+                None
+            );
+            COMPATIBILITY_CHECKS.with(|count| assert_eq!(count.get(), 0));
+        });
+    }
+
+    #[test]
+    fn pointer_moves_do_not_recompute_draft_consumers() {
+        Owner::new().with(|| {
+            let registry = EditorRegistry::<String, String, String, TestPortType>::new(
+                EditorConfig::default(),
+                Callback::new(|_: GraphEvent<String, String, String>| {}),
+            );
+            let reads = Arc::new(AtomicUsize::new(0));
+            let count = reads.clone();
+            let origin = registry.draft_origin;
+            let anchor = Memo::new(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+                origin.get()
+            });
+            assert_eq!(anchor.get(), None);
+            registry.draft_connection.set(Some(DraftConnection {
+                source_port: "source".into(),
+                source_position: Position::default(),
+                port_type: TestPortType::Any,
+                current_end: Position::default(),
+                origin_direction: PortDirection::Output,
+                snap_target: None,
+            }));
+            assert!(anchor.get().is_some());
+            let baseline = reads.load(Ordering::Relaxed);
+            for x in 0..100 {
+                registry.draft_connection.update(|draft| {
+                    let draft = draft.as_mut().unwrap();
+                    draft.current_end = Position::new(x as f64, 0.0);
+                    draft.snap_target = Some(format!("target-{x}"));
+                });
+                assert!(anchor.get().is_some());
+            }
+            assert_eq!(reads.load(Ordering::Relaxed), baseline);
+            registry.draft_connection.set(None);
+            assert_eq!(anchor.get(), None);
+            assert_eq!(reads.load(Ordering::Relaxed), baseline + 1);
+        });
     }
 
     #[test]

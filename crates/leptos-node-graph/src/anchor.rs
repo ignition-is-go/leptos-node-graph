@@ -363,69 +363,79 @@ where
     // on a different node, and type-compatible.
     let id_compat = id.clone();
     let reg_compat = registry.clone();
-    let is_compatible = Signal::derive(move || {
-        reg_compat.draft_connection.with(|d| {
-            let Some(d) = d.as_ref() else { return false };
-            if direction == d.origin_direction {
+    let is_compatible: Signal<bool> = Memo::new(move |_| {
+        reg_compat.ports.track();
+        reg_compat.draft_origin.with(|d| {
+            let Some((source_port, origin_direction)) = d.as_ref() else {
+                return false;
+            };
+            if direction == *origin_direction {
                 return false;
             }
-            if d.source_port == id_compat {
+            if *source_port == id_compat {
                 return false;
             }
             let Some(this_port) = reg_compat.get_port(&id_compat) else {
                 return false;
             };
-            let Some(draft_port) = reg_compat.get_port(&d.source_port) else {
+            let Some(draft_port) = reg_compat.get_port(source_port) else {
                 return false;
             };
             if this_port.node_id == draft_port.node_id {
                 return false;
             }
-            let (out_type, in_type) = if d.origin_direction == PortDirection::Output {
+            let (out_type, in_type) = if *origin_direction == PortDirection::Output {
                 (&draft_port.port_type, &this_port.port_type)
             } else {
                 (&this_port.port_type, &draft_port.port_type)
             };
             T::compatible(out_type, in_type)
         })
-    });
+    })
+    .into();
 
     let id_incompat = id.clone();
     let reg_incompat = registry.clone();
-    let is_incompatible = Signal::derive(move || {
-        reg_incompat.draft_connection.with(|d| {
-            let Some(d) = d.as_ref() else { return false };
-            if d.source_port == id_incompat {
+    let is_incompatible: Signal<bool> = Memo::new(move |_| {
+        reg_incompat.ports.track();
+        reg_incompat.draft_origin.with(|d| {
+            let Some((source_port, origin_direction)) = d.as_ref() else {
+                return false;
+            };
+            if *source_port == id_incompat {
                 return false;
             } // source is not incompatible
-            if direction == d.origin_direction {
+            if direction == *origin_direction {
                 return true;
             } // same direction = can't connect
             let Some(this_port) = reg_incompat.get_port(&id_incompat) else {
                 return true;
             };
-            let Some(draft_port) = reg_incompat.get_port(&d.source_port) else {
+            let Some(draft_port) = reg_incompat.get_port(source_port) else {
                 return true;
             };
             if this_port.node_id == draft_port.node_id {
                 return true;
             }
-            let (out_type, in_type) = if d.origin_direction == PortDirection::Output {
+            let (out_type, in_type) = if *origin_direction == PortDirection::Output {
                 (&draft_port.port_type, &this_port.port_type)
             } else {
                 (&this_port.port_type, &draft_port.port_type)
             };
             !T::compatible(out_type, in_type)
         })
-    });
+    })
+    .into();
 
     let id_source = id.clone();
     let reg_source = registry.clone();
-    let is_source = Signal::derive(move || {
-        reg_source
-            .draft_connection
-            .with(|d| d.as_ref().is_some_and(|d| d.source_port == id_source))
-    });
+    let is_source: Signal<bool> = Memo::new(move |_| {
+        reg_source.draft_origin.with(|d| {
+            d.as_ref()
+                .is_some_and(|(source_port, _)| *source_port == id_source)
+        })
+    })
+    .into();
 
     let display_aliases = use_context::<crate::PortDisplayAliases<P>>();
     let connected_ports =
