@@ -7,6 +7,7 @@ use web_sys::console;
 
 mod nodes;
 mod popup_regression;
+mod port_geometry_regression;
 mod utils;
 mod widgets;
 use crate::nodes::build_node_registry;
@@ -47,6 +48,13 @@ impl PortType for DemoPort {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    if web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .is_some_and(|query| query == "?port-geometry-regression")
+    {
+        mount_to_body(port_geometry_regression::PortGeometryRegression);
+        return;
+    }
     if web_sys::window()
         .and_then(|window| window.location().search().ok())
         .is_some_and(|query| query == "?popup-regression")

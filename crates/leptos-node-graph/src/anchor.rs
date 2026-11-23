@@ -214,8 +214,9 @@ where
     let reg_pos = registry.clone();
     let id_pos = id.clone();
 
+    let reg_measure = registry.clone();
+    let measured_offset = RwSignal::new(None::<Position>);
     Effect::new(move || {
-        let node_pos = node_ctx.position.get();
         let _ports_y = node_ctx.ports_y_offset.get();
         let _node_width = node_ctx.node_width.get();
         let _ports_revision = node_ctx.ports_revision.get();
@@ -223,7 +224,7 @@ where
             return;
         };
 
-        let is_dragging = reg_pos.drag_state.with_untracked(|ds| ds.is_some());
+        let is_dragging = reg_measure.drag_state.with_untracked(|ds| ds.is_some());
         if is_dragging {
             return; // batch_set_positions handles this
         }
@@ -233,14 +234,26 @@ where
             return;
         }
         let node_rect = node.get_bounding_client_rect();
-        let zoom = reg_pos.viewport.get_untracked().zoom;
+        let zoom = reg_measure.viewport.get_untracked().zoom;
         let offset = Position::new(
             (dot_rect.x() + dot_rect.width() / 2.0 - node_rect.x()) / zoom,
             (dot_rect.y() + dot_rect.height() / 2.0 - node_rect.y()) / zoom,
         );
+        measured_offset.set(Some(offset));
+    });
+
+    // NOTE(cx): Moving a node does not change its local port layout. Keep the
+    // measured offset until a size/row change, rather than forcing layout once
+    // per anchor while unrelated nodes are still writing their positions.
+    Effect::new(move || {
+        let node_pos = node_ctx.position.get();
+        let Some(offset) = measured_offset.get() else {
+            return;
+        };
+        if reg_pos.drag_state.with_untracked(|ds| ds.is_some()) {
+            return;
+        }
         let canvas_pos = Position::new(node_pos.x + offset.x, node_pos.y + offset.y);
-        // Publish all measured anchors together rather than waking the entire
-        // port registry between individual DOM reads.
         reg_pos.queue_port_measurement(id_pos.clone(), canvas_pos, offset);
     });
 
