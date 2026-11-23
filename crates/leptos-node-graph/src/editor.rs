@@ -248,6 +248,46 @@ where
         leptos::prelude::document(),
         leptos::ev::mouseup,
         move |ev: web_sys::MouseEvent| {
+            // A dragged wire released on empty canvas offers compatible nodes.
+            // Keep click-to-wire, snapped drops, panning, other panes and node
+            // controls on their existing paths. The menu must own the draft
+            // before the normal release handler gets a chance to cancel it.
+            let empty_canvas = ev.target().and_then(|target| {
+                use leptos::wasm_bindgen::JsCast;
+                target.dyn_into::<web_sys::Element>().ok()
+            }).is_some_and(|target| {
+                ref_mu.get_untracked().is_some_and(|container| container.contains(Some(&target)))
+                    && target.closest("[data-node],[data-anchor],[data-node-menu],[data-node-overlay],[data-node-overlay-backdrop]")
+                        .ok().flatten().is_none()
+            });
+            let dragged_draft = reg_mu.draft_connection.with_untracked(|draft| {
+                draft.as_ref().is_some_and(|draft| {
+                    draft_can_open_menu(draft, reg_mu.viewport.get_untracked().zoom)
+                })
+            });
+            if has_menu
+                && ev.button() == 0
+                && empty_canvas
+                && dragged_draft
+                && !reg_mu.is_panning.get_untracked()
+                && !reg_mu.menu_open.get_untracked()
+            {
+                let screen = Position::new(ev.client_x() as f64, ev.client_y() as f64);
+                if let Some(container) = ref_mu.get_untracked() {
+                    let rect = container.get_bounding_client_rect();
+                    let canvas = reg_mu
+                        .viewport
+                        .get_untracked()
+                        .screen_to_canvas(Position::new(
+                            screen.x - rect.left(),
+                            screen.y - rect.top(),
+                        ));
+                    menu_open_at.set(Some(canvas));
+                    menu_screen_pos.set(Some(screen));
+                    // Effects are deferred; protect the draft synchronously.
+                    reg_mu.menu_open.set(true);
+                }
+            }
             interaction::handle_canvas_mouseup(&reg_mu, ev, &ref_mu);
         },
     );
@@ -515,5 +555,54 @@ where
             screen_pos=menu_screen_pos_signal
             draft_context=draft_context
         />
+    }
+}
+
+// Use screen pixels so a click stays a click at every zoom level.
+fn draft_can_open_menu<P: PortId, T: PortType>(draft: &DraftConnection<P, T>, zoom: f64) -> bool {
+    draft.snap_target.is_none()
+        && (draft.current_end.x - draft.source_position.x)
+            .hypot(draft.current_end.y - draft.source_position.y)
+            * zoom
+            > 5.0
+}
+
+#[cfg(test)]
+mod release_menu_tests {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Kind;
+    impl PortType for Kind {
+        fn compatible(_: &Self, _: &Self) -> bool {
+            true
+        }
+        fn type_id(&self) -> String {
+            "value".into()
+        }
+        fn from_type_id(_: &str) -> Self {
+            Self
+        }
+    }
+
+    #[test]
+    fn release_requires_a_real_drag_and_never_steals_a_snapped_drop() {
+        let mut draft = DraftConnection {
+            source_port: "origin".to_owned(),
+            source_position: Position::new(10.0, 20.0),
+            port_type: Kind,
+            current_end: Position::new(10.0, 20.0),
+            origin_direction: PortDirection::Input,
+            snap_target: None,
+        };
+        assert!(!draft_can_open_menu(&draft, 1.0));
+        draft.current_end = Position::new(13.0, 24.0);
+        assert!(!draft_can_open_menu(&draft, 1.0));
+        assert!(draft_can_open_menu(&draft, 2.0));
+        draft.current_end = Position::new(110.0, 20.0);
+        assert!(draft_can_open_menu(&draft, 1.0));
+        assert!(!draft_can_open_menu(&draft, 0.04));
+        draft.snap_target = Some("destination".to_owned());
+        assert!(!draft_can_open_menu(&draft, 1.0));
     }
 }
